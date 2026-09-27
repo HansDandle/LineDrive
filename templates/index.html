@@ -152,31 +152,7 @@
                 <button type="button" id="scheduleBtn" class="btn btn-primary">Save schedule</button>
             </div>
 
-            <details class="advanced">
-                <summary>Encoding</summary>
-                <div class="field-row">
-                    <div class="field">
-                        <label for="format">Format</label>
-                        <select id="format">
-                            <option value="mp4" selected>MP4</option>
-                            <option value="ts">TS</option>
-                        </select>
-                    </div>
-                    <div class="field">
-                        <label for="crf">Quality (CRF)</label>
-                        <input type="number" id="crf" value="23" min="0" max="51" inputmode="numeric" />
-                    </div>
-                    <div class="field">
-                        <label for="preset">Speed</label>
-                        <select id="preset">
-                            {% for p in ['ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow'] %}
-                            <option value="{{ p }}"{% if p == 'fast' %} selected{% endif %}>{{ p }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                </div>
-                <p class="field-note">Lower CRF means higher quality and bigger files. Slower presets make smaller files but use more CPU.</p>
-            </details>
+            <p class="field-note">Recording quality is set in <a href="/setup">Settings</a>.</p>
         </section>
 
         {% if torrent_enabled %}

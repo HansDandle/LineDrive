@@ -205,8 +205,9 @@ class ConfigManager:
         }
     
     def is_configured(self):
-        """Setup has been done: there's a tuner address and a ZIP code for the guide"""
-        return bool(self.get_hdhr_ip() and self.get('epg', 'zip_code', ''))
+        """Setup has been done: there's a tuner address. The ZIP code is optional (without one the
+        guide comes from SiliconDust alone)."""
+        return bool(self.get_hdhr_ip())
 
     def get_vpn_config(self):
         """Get VPN configuration"""

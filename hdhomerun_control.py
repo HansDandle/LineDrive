@@ -157,6 +157,58 @@ def discover():
     return sorted(devices, key=lambda d: d['ip'])
 
 
+def parse_status(text):
+    """'ch=8vsb:515000000 lock=8vsb ss=65 snq=77 seq=100 ...' -> {'ch': ..., 'lock': ..., 'ss': 65, ...}"""
+    out = {}
+    for part in (text or '').split():
+        key, _, value = part.partition('=')
+        out[key] = int(value) if value.isdigit() else value
+    return out
+
+
+def measure_signal(host, tuner, vchannel, timeout=6.0):
+    """Tune a free tuner to a channel without streaming it and read the signal, like the HDHomeRun
+    app's signal meter. Returns {'ss', 'snq', 'seq', 'locked', 'frequency', 'channels'} where
+    channels are the virtual channels carried on the same frequency (they share the signal), or
+    None if the tuner couldn't be used. Leaves the tuner idle."""
+    import time
+    base = f'/tuner{int(tuner)}'
+    try:
+        getset(host, base + '/vchannel', str(vchannel))
+    except RuntimeError:
+        return None  # in use, or the channel isn't in the lineup
+    try:
+        deadline = time.time() + timeout
+        status = {}
+        while time.time() < deadline:
+            status = parse_status(getset(host, base + '/status'))
+            if status.get('lock', 'none') != 'none' and status.get('seq'):
+                break
+            time.sleep(0.25)
+        if status.get('lock', 'none') == 'none' or not status.get('seq'):
+            return {'ss': status.get('ss', 0), 'snq': 0, 'seq': 0, 'locked': False,
+                    'frequency': str(status.get('ch', '')), 'channels': [str(vchannel)]}
+        # Symbol quality needs a moment to show errors; keep the worst of a few readings
+        samples = [status]
+        for _ in range(3):
+            time.sleep(0.4)
+            samples.append(parse_status(getset(host, base + '/status')))
+        carried = []
+        for line in (getset(host, base + '/streaminfo') or '').splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0].endswith(':') and not any(
+                    flag in line for flag in ('(encrypted)', '(control)', '(no data)')):
+                carried.append(parts[1])
+        return {'ss': min(s.get('ss', 0) for s in samples), 'snq': min(s.get('snq', 0) for s in samples),
+                'seq': min(s.get('seq', 0) for s in samples), 'locked': True,
+                'frequency': str(status.get('ch', '')), 'channels': carried or [str(vchannel)]}
+    finally:
+        try:
+            getset(host, base + '/channel', 'none')
+        except (OSError, RuntimeError):
+            pass
+
+
 def release_tuner(host, tuner):
     """Force a tuner free, ending whatever stream holds it. Clearing the target as well frees it
     even when the client keeps its (now silent) connection open instead of hanging up."""

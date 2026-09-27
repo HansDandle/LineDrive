@@ -153,6 +153,114 @@ def find_due_jobs(jobs, now_dt, grace_min=SCHEDULER_GRACE_MIN):
         due.append((job, slot))
     return due
 
+def interrupted_jobs(jobs, now_dt, padding=lambda channel, slot: 0):
+    """[(job, slot, end, was_started)] for recordings that should be running at now_dt: LineDrive
+    was restarted partway through one (was_started), or was down when it was due to start (past
+    the scheduler's grace window). Only meaningful at startup, before anything is recording."""
+    out = []
+    grace = timedelta(minutes=SCHEDULER_GRACE_MIN)
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        if job.get('type') == 'recurring_series':
+            if job.get('status') != 'active':
+                continue
+            hm = parse_job_time(job.get('time') or (job.get('recurrence') or {}).get('time'))
+            if not hm:
+                continue
+            slot = now_dt.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+            if slot > now_dt:
+                slot -= timedelta(days=1)
+            days = rule_days(job)
+            if days and slot.strftime('%A') not in days:
+                continue
+        elif job.get('status') in ('scheduled', 'recording') and job.get('type') != 'one_time_timeslot':
+            hm = parse_job_time(job.get('time'))
+            try:
+                slot = datetime.strptime(job.get('date') or '', '%Y-%m-%d').replace(hour=hm[0], minute=hm[1])
+            except (TypeError, ValueError):
+                continue
+        else:
+            continue
+        channel = job.get('channel_number') or job.get('channel')
+        end = slot + timedelta(minutes=int(job.get('duration') or 30) + padding(channel, slot))
+        if not (slot <= now_dt < end - timedelta(minutes=2)):
+            continue  # not on now, or nearly over and not worth a tuner
+        try:
+            started = bool(job.get('last_started_at')) and datetime.fromisoformat(job['last_started_at']) >= slot
+        except ValueError:
+            started = False
+        if started or now_dt - slot >= grace:  # within the grace window the scheduler starts it as usual
+            out.append((job, slot, end, started))
+    return out
+
+def resume_interrupted_recordings(now_dt=None):
+    """At startup, pick up recordings a restart cut off (or missed while LineDrive was down) and
+    record the rest. The resumed part is a separate file, "<name> (2).mp4"."""
+    now_dt = now_dt or datetime.now()
+    if not EPG_CACHE.get('data'):
+        load_epg_cache()  # for sports padding and naming; this runs before the first guide load
+    changed = False
+    live = set()  # jobs still on the air, which keep their 'recording' status
+    handled = set()  # channels dealt with
+    me = _local_ip()
+    streaming = {t['channel_number'] for t in tuner_details() or [] if t['in_use'] and t['target_ip'] == me}
+    for job, slot, end, started in interrupted_jobs(scheduled_jobs, now_dt, lambda c, s: overrun_padding(c, s)[0]):
+        ch_num = str(job.get('channel_number') or job.get('channel'))
+        live.add(id(job))
+        if not started and skip_reason(job, slot)[0]:
+            continue
+        handled.add(ch_num)
+        if ch_num in streaming:
+            # e.g. LineDrive run outside Docker crashed and its ffmpeg is still going
+            print(f"[Scheduler] '{job.get('title')}' on {ch_num} is still streaming to this machine; not resuming")
+            continue
+        minutes = max(1, int((end - now_dt).total_seconds() // 60) + 1)
+        what = 'LineDrive restarted during' if started else 'LineDrive was off when'
+        print(f"[Scheduler] Resuming '{job.get('title')}' on {ch_num} for the last {minutes} min ({what} it)")
+        started_at_iso = now_dt.isoformat()
+        run_threaded(record_channel, ch_num, minutes, int(job.get('crf') or 23), job.get('preset') or 'fast',
+                     job.get('format') or 'mp4', started_at=started_at_iso, title=job.get('title'), program_time=slot)
+        job['last_started_at'] = started_at_iso
+        if job.get('type') != 'recurring_series':
+            job['status'] = 'recording'
+        NOTICES.append({'message': f"{what} {job.get('title') or 'a recording'} ({slot.strftime('%I:%M %p').lstrip('0')} "
+                                   f"on {ch_num}), so it's recording the rest as a second file.", 'at': now_dt.isoformat()})
+        changed = True
+    # Recordings that weren't from the schedule ("Record the rest", manual ones)
+    for rec in _load_active():
+        # Its caption file is only written when the recording ends normally
+        srt = os.path.splitext(rec.get('path') or '')[0] + '.en.srt'
+        try:
+            if rec.get('path') and os.path.getsize(srt) == 0:
+                os.remove(srt)
+        except OSError:
+            pass
+        try:
+            ch_num, end = str(rec['channel_number']), datetime.fromisoformat(rec['ends_at'])
+            program_time = datetime.fromisoformat(rec.get('program_time') or rec['started_at'])
+            crf, preset, fmt = rec.get('settings') or (23, 'fast', 'mp4')
+        except (KeyError, ValueError, TypeError):
+            continue
+        if ch_num in handled or ch_num in streaming or end - now_dt < timedelta(minutes=2) or ch_num not in channels:
+            continue
+        handled.add(ch_num)
+        minutes = int((end - now_dt).total_seconds() // 60) + 1
+        print(f"[Scheduler] Resuming '{rec.get('title') or ch_num}' on {ch_num} for the last {minutes} min")
+        run_threaded(record_channel, ch_num, minutes, int(crf), preset, fmt, started_at=now_dt.isoformat(),
+                     title=rec.get('title') or None, program_time=program_time)
+        NOTICES.append({'message': f"LineDrive restarted during {rec.get('title') or 'a recording on ' + ch_num}, "
+                                   f"so it's recording the rest as a second file.", 'at': now_dt.isoformat()})
+    # One-time recordings a restart cut off after their end time: they're over, not "recording"
+    for job in scheduled_jobs:
+        if isinstance(job, dict) and job.get('status') == 'recording' and job.get('type') != 'recurring_series' \
+                and id(job) not in live:
+            job['status'] = 'completed'
+            job['interrupted'] = True
+            changed = True
+    if changed:
+        save_schedule()
+
 _SCHEDULER_LOCK = None
 
 def _claim_scheduler():
@@ -182,6 +290,10 @@ def run_schedule_loop():
               f"{DATA_DIR}; this copy will NOT record scheduled shows.")
         return
     print("Schedule loop started")
+    try:
+        resume_interrupted_recordings()
+    except Exception as e:
+        print(f"[Scheduler] Couldn't check for interrupted recordings: {e}")
     heartbeat_counter = 0
     while True:
         try:
@@ -225,7 +337,8 @@ def run_schedule_loop():
                         # ffmpeg can't get one, record_channel reports the failure on the status card.
                         print(f"[Scheduler] Warning: {busy}")
                     started_at_iso = now_dt.isoformat()
-                    run_threaded(record_channel, ch_num, dur_min, crf, preset, fmt, started_at=started_at_iso, title=job.get('title'))
+                    run_threaded(record_channel, ch_num, dur_min, crf, preset, fmt, started_at=started_at_iso,
+                                 title=job.get('title'), program_time=slot)
                     job['last_started_at'] = started_at_iso
                     if job.get('type') != 'recurring_series':
                         job['status'] = 'recording'
@@ -398,6 +511,7 @@ stop_event = threading.Event()
 
 app = Flask(__name__)
 from epg_zap2it import fetch_zap2it_epg
+from epg_hdhomerun import fetch_hdhomerun_guide, parse_hdhomerun_guide, merge_guides
 import time
 
 # EPG caching with disk persistence
@@ -413,6 +527,7 @@ def load_epg_cache():
                 cache_data = json.load(f)
                 EPG_CACHE["data"] = cache_data.get("data")
                 EPG_CACHE["timestamp"] = cache_data.get("timestamp", 0)
+                EPG_CACHE["sd_timestamp"] = cache_data.get("sd_timestamp", 0)
                 # Caches saved before categories/flags were parsed: treat as stale so they refetch
                 if EPG_CACHE["data"] and 'flags' not in EPG_CACHE["data"][0]:
                     EPG_CACHE["timestamp"] = 0
@@ -428,7 +543,8 @@ def save_epg_cache():
     try:
         cache_data = {
             "data": EPG_CACHE["data"],
-            "timestamp": EPG_CACHE["timestamp"]
+            "timestamp": EPG_CACHE["timestamp"],
+            "sd_timestamp": EPG_CACHE.get("sd_timestamp", 0),
         }
         with open(EPG_CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump(cache_data, f, ensure_ascii=False, indent=2)
@@ -445,21 +561,28 @@ def get_epg():
     with _EPG_LOCK:
         return _get_epg_locked()
 
+SD_GUIDE_TTL = 4 * 3600  # SiliconDust's free guide only reaches a day or so ahead, so refresh it more often
+
 def _get_epg_locked():
+    """Gracenote (with a ZIP code: a week of US listings) merged with SiliconDust's guide for the
+    tuner (about a day ahead: series IDs, original air dates, artwork, and the whole guide outside
+    the US). See epg_hdhomerun."""
     now = time.time()
-    if not config.get('epg', 'zip_code', ''):
-        return EPG_CACHE.get('data') or []  # no ZIP yet: nothing to fetch until setup is done
-    
+    if not HDHR_IP:
+        return EPG_CACHE.get('data') or []  # not set up yet: nothing to fetch
+    zip_code = config.get('epg', 'zip_code', '')
+
     # Load from disk if memory cache is empty
     if not EPG_CACHE["data"]:
         load_epg_cache()
 
     cache_age = now - EPG_CACHE["timestamp"]
+    changed = False
 
     # Check if we need to fetch: cache empty or expired. An empty result is retried,
     # but at most every 10 minutes so a failing guide service isn't hammered.
     retry_ok = now - EPG_CACHE.get("last_attempt", 0) > 600
-    if (not EPG_CACHE["data"] and retry_ok) or cache_age > EPG_TTL:
+    if zip_code and ((not EPG_CACHE["data"] and retry_ok) or cache_age > EPG_TTL):
         try:
             if not EPG_CACHE["data"]:
                 print("EPG: fetching fresh data (no cache available)")
@@ -470,22 +593,35 @@ def _get_epg_locked():
             fresh = fetch_zap2it_epg()
             if not fresh:
                 print("EPG: fetch returned no programs; keeping previous cache")
-                return EPG_CACHE["data"]
-            EPG_CACHE["data"] = fresh
-            EPG_CACHE["timestamp"] = now
-
-            # Save to disk
-            save_epg_cache()
-            
-            print(f"EPG: fetched and cached {len(EPG_CACHE['data']) if EPG_CACHE['data'] else 0} programs")
+            else:
+                EPG_CACHE["data"] = fresh
+                EPG_CACHE["timestamp"] = now
+                EPG_CACHE["sd_timestamp"] = EPG_CACHE["sd_attempt"] = 0  # merge SiliconDust into it below
+                changed = True
+                print(f"EPG: fetched {len(fresh)} programs from Gracenote")
         except Exception as e:
             print(f"EPG fetch failed: {e}")
-            # Return stale data if available, otherwise None
-            return EPG_CACHE["data"]
+
+    if now - EPG_CACHE.get("sd_timestamp", 0) > SD_GUIDE_TTL and now - EPG_CACHE.get("sd_attempt", 0) > 600:
+        EPG_CACHE["sd_attempt"] = now
+        try:
+            sd = parse_hdhomerun_guide(fetch_hdhomerun_guide(HDHR_IP))
+        except Exception as e:
+            print(f"EPG: SiliconDust guide failed: {e}")
+            sd = []
+        if sd:
+            EPG_CACHE["data"] = merge_guides(EPG_CACHE["data"] or [], sd)
+            EPG_CACHE["sd_timestamp"] = now
+            if not zip_code:
+                EPG_CACHE["timestamp"] = now
+            changed = True
+            print(f"EPG: merged {len(sd)} SiliconDust listings")
+
+    if changed:
+        save_epg_cache()
     else:
         print(f"EPG: using cached data (age: {cache_age/60:.1f} minutes)")
-    
-    return EPG_CACHE["data"]
+    return EPG_CACHE["data"] or []
 
 def search_cached_epg(query, days=7):
     """Search through cached EPG data instead of fetching fresh data"""
@@ -585,6 +721,7 @@ channels = get_hdhr_channels(HDHR_IP)
 days_list = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
 ACTIVE_RECORDINGS = {}  # filename -> info about recordings in progress (for the status display)
+RESTARTING = False  # set while settings are applied by restarting; recordings stopped for it get resumed
 RECORDING_FAILURES = []  # recent recordings that couldn't start or died, newest last (for the status display)
 
 class RecordingFailed(Exception):
@@ -712,6 +849,161 @@ def no_tuner_message():
         return f"{what} in use ({', '.join(busy)}). Stop one of those to record this."
     return None
 
+# ---- Signal strength per channel ---------------------------------------------------------------
+# Measured by briefly tuning a free tuner (a scan, or one channel from the guide), and sampled
+# while any tuner is on a channel. Virtual channels on the same frequency share one reading.
+SIGNAL_FILE = os.path.join(DATA_DIR, 'signal.json')
+SIGNAL_SCAN_MAX_AGE = timedelta(days=7)
+SIGNAL_STATE = {'scanning': False, 'done': 0, 'total': 0, 'finished_at': None}
+
+def _load_signals():
+    try:
+        with open(SIGNAL_FILE, encoding='utf-8') as f:
+            saved = json.load(f)
+        SIGNAL_STATE['finished_at'] = saved.get('scanned_at')
+        return saved.get('channels') or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+SIGNALS = _load_signals()  # channel number -> {ss, snq, seq, locked, frequency, at}
+
+def _save_signals():
+    try:
+        with open(SIGNAL_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'channels': SIGNALS, 'scanned_at': SIGNAL_STATE['finished_at']}, f)
+    except OSError as e:
+        print(f"[Signal] Couldn't save: {e}")
+
+def _record_signal(reading, when=None):
+    at = (when or datetime.now()).isoformat(timespec='seconds')
+    entry = {k: reading.get(k) for k in ('ss', 'snq', 'seq', 'locked', 'frequency')} | {'at': at}
+    freq = reading.get('frequency')
+    same = set(reading.get('channels') or [])
+    if freq:
+        same |= {ch for ch, s in SIGNALS.items() if s.get('frequency') == freq}
+    for ch in same:
+        SIGNALS[str(ch)] = entry
+
+def signal_summary(channel_number):
+    """{bars 0-4, weak, snq, ss, seq, at} for display, or None if it's never been measured.
+    Quality (SNQ) is what decides whether a recording breaks up; symbol quality under 100
+    means errors were already getting through."""
+    s = SIGNALS.get(str(channel_number))
+    if not s:
+        return None
+    snq = s.get('snq') or 0
+    bars = 0 if not s.get('locked') else 4 if snq >= 80 else 3 if snq >= 65 else 2 if snq >= 50 else 1
+    return {'bars': bars, 'weak': bars <= 2 or (s.get('seq') or 0) < 100, 'snq': snq, 'ss': s.get('ss') or 0,
+            'seq': s.get('seq') or 0, 'locked': bool(s.get('locked')), 'at': s.get('at')}
+
+def _free_tuner_index():
+    tuners = tuner_details()
+    free = [t['index'] for t in tuners or [] if not t['in_use']]
+    return free[-1] if free else None  # the last one: recordings ask for "any tuner", which starts at the first
+
+def _recording_due_soon(minutes=5):
+    soon = (datetime.now() + timedelta(minutes=minutes)).timestamp()
+    return any(u['start'] is not None and not u['airing'] and u['start'] <= soon and not u.get('skip')
+               for u in upcoming_recordings())
+
+def check_signal(channel_number):
+    """Measure one channel now. Returns the summary, or None with no free tuner."""
+    from hdhomerun_control import measure_signal
+    tuner = _free_tuner_index()
+    if tuner is None:
+        return None
+    reading = measure_signal(HDHR_IP, tuner, channel_number)
+    if not reading:
+        return None
+    _record_signal(reading)
+    _save_signals()
+    return signal_summary(channel_number)
+
+def scan_signals():
+    """Measure every channel, one frequency at a time, on a free tuner. Stops early rather than
+    hold a tuner a recording is about to need."""
+    from hdhomerun_control import measure_signal
+    if SIGNAL_STATE['scanning'] or not channels:
+        return
+    SIGNAL_STATE.update(scanning=True, done=0, total=len(channels))
+    try:
+        measured = set()
+        for ch in sorted(channels, key=lambda c: tuple(int(x) for x in c.split('.') if x.isdigit())):
+            if ch in measured:
+                SIGNAL_STATE['done'] += 1
+                continue
+            tuner = _free_tuner_index()
+            if tuner is None or _recording_due_soon():
+                print("[Signal] Scan stopped: tuners needed for recording")
+                break
+            reading = measure_signal(HDHR_IP, tuner, ch)
+            if reading:
+                _record_signal(reading)
+                measured |= set(reading['channels']) | {ch}
+            SIGNAL_STATE['done'] += 1
+        else:
+            SIGNAL_STATE['finished_at'] = datetime.now().isoformat(timespec='seconds')  # a complete scan
+            print(f"[Signal] Scanned {SIGNAL_STATE['done']} channels")
+        _save_signals()
+    finally:
+        SIGNAL_STATE['scanning'] = False
+
+def sample_live_signals():
+    """Record the signal on channels tuners are streaming right now (ours or another app's)"""
+    try:
+        status = requests.get(f"http://{HDHR_IP}/status.json", timeout=3).json()
+    except Exception:
+        return
+    for s in status:
+        if s.get('VctNumber') and s.get('SignalQualityPercent') is not None:
+            _record_signal({'ss': s.get('SignalStrengthPercent', 0), 'snq': s.get('SignalQualityPercent', 0),
+                            'seq': s.get('SymbolQualityPercent', 0), 'locked': True,
+                            'frequency': SIGNALS.get(s['VctNumber'], {}).get('frequency'),
+                            'channels': [s['VctNumber']]})
+
+def run_signal_loop():
+    """Sample live signal every minute; rescan all channels when the last scan is a week old"""
+    import time as _t
+    _t.sleep(120)  # let startup (and any resumed recordings) settle
+    ticks = 0
+    while True:
+        try:
+            sample_live_signals()
+            if ticks % 30 == 0:
+                _save_signals()
+                last = SIGNAL_STATE['finished_at']
+                stale = not last or datetime.now() - datetime.fromisoformat(last) > SIGNAL_SCAN_MAX_AGE
+                if stale and not ACTIVE_RECORDINGS and not _recording_due_soon(15):
+                    scan_signals()
+        except Exception as e:
+            print(f"[Signal] {e}")
+        ticks += 1
+        _t.sleep(60)
+
+@app.route('/api/signal')
+def api_signal():
+    return jsonify({'channels': {ch: signal_summary(ch) for ch in channels if SIGNALS.get(ch)},
+                    'scan': SIGNAL_STATE})
+
+@app.route('/api/signal/scan', methods=['POST'])
+def api_signal_scan():
+    if SIGNAL_STATE['scanning']:
+        return jsonify({'message': 'Already checking.'})
+    if _free_tuner_index() is None:
+        return jsonify({'error': 'Every tuner is in use right now. Try again when one is free.'}), 409
+    threading.Thread(target=scan_signals, daemon=True).start()
+    return jsonify({'message': 'Checking the signal on every channel. This takes a minute or two.'})
+
+@app.route('/api/signal/check', methods=['POST'])
+def api_signal_check():
+    ch = str((request.get_json() or {}).get('channel', ''))
+    if ch not in channels:
+        return jsonify({'error': 'Unknown channel'}), 400
+    summary = check_signal(ch)
+    if summary is None:
+        return jsonify({'error': 'Every tuner is in use right now, so the signal can’t be checked.'}), 409
+    return jsonify({'signal': summary})
+
 _LIBRARY_CACHE = {'at': 0, 'index': set()}
 
 def _norm_title(text):
@@ -778,6 +1070,26 @@ def skip_reason(job, slot):
         return 'already recorded', prog
     return None, prog
 
+# Config recording.quality. Sizes measured on a 1080i network broadcast; 720p stations run smaller.
+# The 720p profile deinterlaces first (bwdif only touches interlaced frames), since scaling
+# interlaced video leaves combing on motion.
+QUALITY_PROFILES = {
+    'best':     {'label': 'Best (about 3.5 GB per hour)',
+                 'video': ['-c:v', 'libx264', '-preset', 'fast', '-crf', '21']},
+    'standard': {'label': 'Standard (about 2.5 GB per hour)',
+                 'video': ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23']},
+    'smaller':  {'label': 'Smaller (about 1.8 GB per hour)',
+                 'video': ['-c:v', 'libx264', '-preset', 'fast', '-crf', '26']},
+    '720p':     {'label': '720p (about 0.9 GB per hour, lightest on the CPU)',
+                 'video': ['-vf', 'bwdif=mode=send_frame:deint=interlaced,scale=-2:720',
+                           '-c:v', 'libx264', '-preset', 'fast', '-crf', '23']},
+    'original': {'label': 'Original broadcast (about 5 GB per hour, no conversion, .ts files)',
+                 'video': ['-c:v', 'copy'], 'audio': ['-c:a', 'copy'], 'ts': True},
+}
+
+def quality_profile():
+    return QUALITY_PROFILES.get(config.get('recording', 'quality', 'standard'), QUALITY_PROFILES['standard'])
+
 SPORTS_LOOKBACK = timedelta(hours=3)
 
 def overrun_padding(channel_number, slot):
@@ -803,8 +1115,10 @@ def overrun_padding(channel_number, slot):
 NEW_FLAGS = {'New', 'Premiere', 'Live', 'Finale'}
 
 def is_new_listing(prog):
-    """Guide says this airing is a first run (Gracenote flags New/Premiere/Live/Finale)"""
-    return bool(NEW_FLAGS & set(prog.get('flags') or []))
+    """Guide says this airing is a first run: Gracenote flags New/Premiere/Live/Finale, SiliconDust's
+    first-airing mark, or an original air date of the day it airs (catches an unflagged new episode)"""
+    return bool(NEW_FLAGS & set(prog.get('flags') or [])) or bool(prog.get('first_run')) or \
+        bool(prog.get('original_air_date') and prog.get('original_air_date') == prog.get('date'))
 
 def rerun_listing(job, slot):
     """For a 'new episodes only' series rule: the guide listing at this slot if it's a rerun, else None.
@@ -927,16 +1241,21 @@ def notify_jellyfin(host_path):
     except Exception as e:
         print(f"[Jellyfin] Couldn't notify: {e}")
 
-def record_channel(channel_key, duration_min, crf=23, preset="fast", record_format="mp4", started_at=None, title=None):
+def record_channel(channel_key, duration_min, crf=23, preset="fast", record_format="mp4", started_at=None, title=None,
+                   program_time=None):
+    """program_time: when the show being recorded started, for naming a recording that starts
+    late (e.g. resumed after a restart, when the guide may already show the next program)"""
     global current_process, stop_event
     chname = channels[channel_key]
     # Use a filesystem-friendly timestamp for the output filename and keep an ISO timestamp for job tracking
     started_at = started_at or datetime.now().isoformat()
     started = datetime.fromisoformat(started_at)
     now = started.strftime("%Y-%m-%d_%H-%M")
+    if quality_profile().get('ts'):
+        record_format = 'ts'
     ext = ".mp4" if record_format=="mp4" else ".ts"
-    # Name the file after what the guide says is on this channel right now
-    prog = program_on_air(channel_key, started)
+    # Name the file after what the guide says is on this channel
+    prog = program_on_air(channel_key, program_time or started)
     base = recording_basename(prog, started) if prog else f"{chname}_{now}"
     folder = recording_folder(prog)
     os.makedirs(folder, exist_ok=True)
@@ -951,7 +1270,12 @@ def record_channel(channel_key, duration_min, crf=23, preset="fast", record_form
         'started_at': started_at,
         'ends_at': (datetime.fromisoformat(started_at) + timedelta(minutes=int(duration_min))).isoformat(),
         'file': filename,
+        # For resuming after a restart
+        'path': filepath,
+        'program_time': (program_time or started).isoformat(),
+        'settings': [crf, preset, record_format],
     }
+    _save_active()
     mqtt_poke()
     try:
         _record_to_file(channel_key, duration_min, crf, preset, record_format, started_at, filepath, url)
@@ -978,7 +1302,27 @@ def record_channel(channel_key, duration_min, crf=23, preset="fast", record_form
             pass
     finally:
         ACTIVE_RECORDINGS.pop(filename, None)
+        if not RESTARTING:
+            _save_active()
         mqtt_poke()
+
+ACTIVE_FILE = os.path.join(DATA_DIR, 'recording_now.json')
+
+def _save_active():
+    """What's recording, on disk, so a restart can pick up recordings that aren't in the schedule
+    ("Record the rest", manual recordings)"""
+    try:
+        with open(ACTIVE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(list(ACTIVE_RECORDINGS.values()), f, default=str)
+    except OSError as e:
+        print(f"[Recording] Couldn't save {ACTIVE_FILE}: {e}")
+
+def _load_active():
+    try:
+        with open(ACTIVE_FILE, encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
 
 def _record_to_file(channel_key, duration_min, crf, preset, record_format, started_at, filepath, url):
     global current_process, stop_event
@@ -988,18 +1332,18 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
     # Determine ffmpeg binary: prefer configured path, fallback to system ffmpeg
     ffmpeg_bin = FFMPEG_PATH if os.path.exists(FFMPEG_PATH) else "ffmpeg"
 
+    # Settings -> Recording quality (recording.quality) decides the encoding for every recording;
+    # the crf/preset a schedule entry carries are from older versions and no longer used
+    profile = quality_profile()
+    cmd = [ffmpeg_bin, "-i", url, "-t", str(duration_min*60)] + profile['video']
     if record_format == "mp4":
-        cmd = [
-            ffmpeg_bin, "-i", url, "-t", str(duration_min*60),
-            "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-            "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", "-y", filepath
-        ]
+        # Fragmented MP4: a recording cut off by a crash or restart still plays up to that point
+        # (a regular MP4 writes its index last and is unplayable without it), and there's no
+        # minutes-long index rewrite when it ends
+        cmd += profile.get('audio', ["-c:a", "aac", "-b:a", "160k"]) + \
+            ["-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-y", filepath]
     else:
-        cmd = [
-            ffmpeg_bin, "-i", url, "-t", str(duration_min*60),
-            "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-            "-c:a", "ac3", "-b:a", "192k", "-y", filepath
-        ]
+        cmd += profile.get('audio', ["-c:a", "ac3", "-b:a", "192k"]) + ["-y", filepath]
     # Config recording.captions (default on): also save closed captions as a .srt beside the video
     captions = None
     if config.get('recording', 'captions', True):
@@ -1033,7 +1377,7 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
     while proc.poll() is None:
         if stop_event.is_set():
             stopped = True
-            # ffmpeg now rewrites the file with its index up front, which takes minutes for a long show
+            # ffmpeg now finishes the file (older, non-fragmented recordings took minutes here)
             ACTIVE_RECORDINGS.get(os.path.basename(filepath), {})['finishing'] = True
             try:
                 proc.stdin.write(b'q\n')
@@ -1051,9 +1395,10 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
         print(f"[Recording] Saved captions: {os.path.basename(captions.path)}")
     failed = proc.returncode != 0 and not stopped
     reason = _explain_ffmpeg_failure(tail) if failed else None
-    # Attempt to mark matching scheduled job as completed (or failed)
+    # Attempt to mark matching scheduled job as completed (or failed); when stopped for a
+    # restart it stays 'recording' so the restarted LineDrive resumes it
     try:
-        for job in reversed(scheduled_jobs):  # search latest first
+        for job in ([] if RESTARTING else reversed(scheduled_jobs)):  # search latest first
             if job.get('status') == 'recording' and str(job.get('channel_number')) == str(channel_key):
                 # Match by start time within a 2-minute window
                 try:
@@ -3770,9 +4115,12 @@ def api_guide():
                 'duration': duration,
                 'recording': _guide_coverage(num, start_dt),
                 'recording_now': recording_now(num, start_dt, end_dt),
+                'image': p.get('image') or '',
+                'new': is_new_listing(p),
             })
         items.sort(key=lambda i: i['start'])
-        out_channels.append({'number': num, 'name': name, 'call_sign': call or '', 'programs': items})
+        out_channels.append({'number': num, 'name': name, 'call_sign': call or '', 'programs': items,
+                             'signal': signal_summary(num)})
 
     return jsonify({
         'window': {'start': window_start.timestamp(), 'end': window_end.timestamp()},
@@ -4122,8 +4470,10 @@ def setup_page():
         'recordings': config.get('directories', 'recordings', '') or '',
         'distant_channels': config.get('guide', 'distant_channels', []) or [],
         'jellyfin': c.get('jellyfin') or {}, 'jellyseerr': c.get('jellyseerr') or {}, 'mqtt': c.get('mqtt') or {},
+        'quality': config.get('recording', 'quality', 'standard') or 'standard',
     }
     return render_template('setup.html', settings=settings, first_run=not config.is_configured(),
+                           qualities=[(k, p['label']) for k, p in QUALITY_PROFILES.items()],
                            in_docker=IN_DOCKER, cache_bust=str(int(time.time())))
 
 @app.route('/api/setup/discover')
@@ -4213,8 +4563,8 @@ def api_setup_save():
     zip_code = str(data.get('zip_code', '')).strip()
     if not ip:
         return jsonify({'error': 'Enter your HDHomeRun address'}), 400
-    if not re.fullmatch(r'\d{5}', zip_code):
-        return jsonify({'error': 'Enter a 5-digit ZIP code'}), 400
+    if zip_code and not re.fullmatch(r'\d{5}', zip_code):
+        return jsonify({'error': 'Enter a 5-digit ZIP code, or leave it empty outside the US'}), 400
     c = config.config
     old_zip = config.get('epg', 'zip_code', '')
     c.setdefault('hdhr', {})['ip_address'] = ip
@@ -4230,6 +4580,8 @@ def api_setup_save():
     epg['timezone'] = tz
     if not IN_DOCKER and data.get('recordings'):
         c.setdefault('directories', {})['recordings'] = str(data['recordings']).strip()
+    if data.get('quality') in QUALITY_PROFILES:
+        c.setdefault('recording', {})['quality'] = data['quality']
     c.setdefault('guide', {})['distant_channels'] = [str(m) for m in data.get('distant_channels', []) if str(m).isdigit()]
     for section, keys in (('jellyfin', ('url', 'api_key', 'recordings_path')), ('jellyseerr', ('url', 'api_key')),
                           ('mqtt', ('host', 'port', 'username', 'password'))):
@@ -4254,6 +4606,17 @@ def _restart_soon():
     """Re-exec this process so settings read at startup (tuner address, folders) take effect"""
     import time as _t
     _t.sleep(1.0)
+    global RESTARTING
+    RESTARTING = True
+    if ACTIVE_RECORDINGS:
+        # Close recordings properly first (the restarted LineDrive records the rest). Left
+        # running, their ffmpeg would lose its connection to LineDrive mid-write.
+        print("[Setup] Stopping recordings before restarting; they'll resume right after")
+        stop_event.set()
+        for _ in range(60):
+            if not ACTIVE_RECORDINGS:
+                break
+            _t.sleep(1)
     print("[Setup] Settings saved; restarting LineDrive")
     sys.stdout.flush()
     if MQTT_BRIDGE:
@@ -4703,7 +5066,7 @@ def record_now():
     if busy:
         return jsonify({"message": busy, "error": busy}), 409
     run_threaded(record_channel, data['channel'], int(data['duration']),
-                 int(data['crf']), data['preset'], data['format'])
+                 int(data.get('crf') or 23), data.get('preset') or 'fast', data.get('format') or 'mp4')
     return jsonify({"message": f"Recording {data['channel']} started."})
 
 @app.route("/stop_recording", methods=["POST"])
@@ -5004,6 +5367,10 @@ if __name__=="__main__":
         print(f"Background EPG refresh loop: ENABLED (every {EPG_TTL / 3600:.0f} hours)")
     else:
         print("Background EPG refresh loop: DISABLED (unset ENABLE_BACKGROUND_EPG_REFRESH to enable)")
+
+    # Per-channel signal strength for the guide
+    if HDHR_IP:
+        threading.Thread(target=run_signal_loop, daemon=True).start()
 
     # Home Assistant integration (if mqtt.host is configured)
     start_mqtt()

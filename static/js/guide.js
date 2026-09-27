@@ -231,7 +231,9 @@
       const rowBlocks = [];
       state.rows.push(rowBlocks);
       const chan = el('div', 'chan');
-      chan.append(el('span', 'chan-num', ch.number), el('span', 'chan-name', ch.name));
+      const num = el('span', 'chan-num', ch.number);
+      if (ch.signal) num.append(signalBars(ch.signal));
+      chan.append(num, el('span', 'chan-name', ch.name));
       chan.title = ch.call_sign ? ch.name + ' (' + ch.call_sign + ')' : ch.name;
       const track = el('div', 'track' + (ch.programs.length ? '' : ' empty'));
       track.style.width = trackW + 'px';
@@ -277,6 +279,56 @@
     applySearch();
     updateNow();
     pinLabels();
+  }
+
+  function signalBars(s) {
+    const bars = el('span', 'sig' + (!s.locked ? ' none' : s.weak ? ' weak' : ''));
+    for (let i = 1; i <= 4; i++) bars.append(el('i', i <= Math.max(s.bars, s.locked ? 0 : 1) ? 'on' : ''));
+    bars.title = signalText(s);
+    return bars;
+  }
+
+  function signalText(s) {
+    if (!s.locked) return 'No signal when last checked';
+    const level = ['', 'Poor', 'Weak', 'Good', 'Excellent'][s.bars];
+    return level + ' signal · quality ' + s.snq + '%, strength ' + s.ss + '%' +
+      (s.seq < 100 ? ', some errors' : '');
+  }
+
+  function renderSignal(ch) {
+    const box = panelEls.signal;
+    const s = ch.signal;
+    box.replaceChildren();
+    box.classList.toggle('weak', !!(s && s.weak));
+    let text = s ? signalText(s) : 'Signal not checked yet';
+    if (s && s.weak) text += ' — recordings may break up';
+    if (s && s.at) text += ' · ' + ago(s.at);
+    box.append(document.createTextNode(text));
+    const check = el('button', 'link', 'Check now');
+    check.type = 'button';
+    check.addEventListener('click', async () => {
+      check.disabled = true;
+      check.textContent = 'Checking…';
+      try {
+        const res = await post('/api/signal/check', { channel: ch.number });
+        ch.signal = res.signal;
+        renderSignal(ch);
+        load(state.day, { keepScroll: true, silent: true });
+      } catch (err) {
+        toast(err.message, true);
+        check.disabled = false;
+        check.textContent = 'Check now';
+      }
+    });
+    box.append(check);
+  }
+
+  function ago(iso) {
+    const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+    if (mins < 2) return 'just now';
+    if (mins < 90) return mins + ' min ago';
+    if (mins < 36 * 60) return Math.round(mins / 60) + ' h ago';
+    return Math.round(mins / 1440) + ' days ago';
   }
 
   // ---- D-pad / arrow-key navigation between shows -------------------------
@@ -429,6 +481,8 @@
     when: document.getElementById('pWhen'),
     meta: document.getElementById('pMeta'),
     recording: document.getElementById('pRecording'),
+    signal: document.getElementById('pSignal'),
+    art: document.getElementById('pArt'),
     desc: document.getElementById('pDesc'),
     actions: document.getElementById('pActions'),
   };
@@ -468,8 +522,16 @@
       fmt(p.start, { weekday: 'long', month: 'short', day: 'numeric' }) + ', ' +
       fmt(p.start, { hour: 'numeric', minute: '2-digit' }) + '–' + fmt(p.end, { hour: 'numeric', minute: '2-digit' }) +
       ' (' + p.duration + ' min)';
-    panelEls.meta.textContent = [p.genre, p.rating].filter(Boolean).join(' · ');
+    panelEls.meta.textContent = [p.new && 'New', p.genre, p.rating].filter(Boolean).join(' · ');
     panelEls.desc.textContent = p.description || '';
+    panelEls.art.hidden = !p.image;
+    if (p.image) {
+      panelEls.art.onerror = () => { panelEls.art.hidden = true; };
+      panelEls.art.src = p.image;
+    } else {
+      panelEls.art.removeAttribute('src');
+    }
+    renderSignal(ch);
 
     const now = nowSec();
     const rec = p.recording;

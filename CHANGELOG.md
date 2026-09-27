@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Closed captions are saved as `<recording>.en.srt` beside each recording, so Jellyfin, Plex and Kodi offer them as subtitles. They're read from the broadcast as it airs. Turn off with `recording.captions: false`.
 - The status card says "Finishing…" while a stopped or ended recording is being saved.
+- SiliconDust's guide for your tuner (the HDHomeRun app's) is merged into Gracenote's: series IDs, original air dates, artwork, and listings for channels Gracenote lacks. Without a ZIP code it's the whole guide, so LineDrive works outside the US.
+- Recordings resume after a restart: whatever should be recording (scheduled, "Record the rest" or manual) is picked up again as `<name> (2)`, and shows missed while LineDrive was off are started if they're still on.
+- Signal strength per channel: a scan on a spare tuner (weekly, or Settings → Check signal) plus live readings. The guide shows bars and warns about weak channels; "Check now" re-measures one.
+- Settings → Recording quality: Best, Standard, Smaller, 720p or Original. Replaces the CRF/speed fields on the home page.
+
+### Changed
+- MP4 recordings are fragmented, so one cut off by a crash or restart still plays, and there's no slow index rewrite when a recording ends.
+- An airing whose original air date is the day it airs counts as new, even without a "New" flag.
+- The ZIP code is optional.
 
 ## [3.0.0] - 2026-09-27
 

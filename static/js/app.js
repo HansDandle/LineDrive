@@ -248,12 +248,9 @@
     });
   });
 
+  // Encoding comes from Settings -> Recording quality
   function encoding() {
-    return {
-      format: $('format').value,
-      crf: parseInt($('crf').value, 10) || 23,
-      preset: $('preset').value,
-    };
+    return {};
   }
 
   function chosenChannel() {

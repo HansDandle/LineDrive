@@ -12,6 +12,7 @@
   --accent-soft: rgba(79, 195, 247, 0.14);
   --rec: #ff5a5f;
   --rec-soft: rgba(255, 90, 95, 0.14);
+  --warn: #ffb74d;
   --chan-w: 128px;
   --row-h: 64px;
   --ruler-h: 32px;
@@ -134,7 +135,16 @@ button, input { font: inherit; color: inherit; }
   border-right: 1px solid var(--line);
   display: flex; flex-direction: column; justify-content: center; min-width: 0;
 }
-.chan-num { font-weight: 600; font-variant-numeric: tabular-nums; }
+.chan-num { font-weight: 600; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 6px; }
+
+/* Signal bars: four bars, lit up to the channel's level */
+.sig { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 11px; }
+.sig i { width: 3px; border-radius: 1px; background: var(--line-strong); }
+.sig i:nth-child(1) { height: 4px; } .sig i:nth-child(2) { height: 6px; }
+.sig i:nth-child(3) { height: 8.5px; } .sig i:nth-child(4) { height: 11px; }
+.sig i.on { background: var(--text-2); }
+.sig.weak i.on { background: var(--warn); }
+.sig.none i.on { background: var(--rec); }
 .chan-name { color: var(--text-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .track { position: relative; flex: none; }
 .track.empty::after {
@@ -217,6 +227,12 @@ body.panel-open .scrim { opacity: 1; pointer-events: auto; }
 .p-when { color: var(--accent); }
 .p-meta { color: var(--text-2); font-size: 13px; }
 .p-recording { color: var(--rec); font-weight: 600; }
+.p-art { display: block; width: 100%; max-height: 180px; object-fit: cover; border-radius: 10px; margin: 8px 0 12px; background: var(--surface); }
+.p-art[hidden] { display: none; }
+.p-signal { color: var(--text-2); font-size: 13px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.p-signal.weak { color: var(--warn); }
+.p-signal .link { border: none; background: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; }
+.p-signal .link:disabled { color: var(--text-3); cursor: default; }
 .p-desc { color: var(--text-2); line-height: 1.55; margin-top: 12px !important; }
 .p-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
 .p-actions button {

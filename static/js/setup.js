@@ -108,6 +108,42 @@
   $('checkTuner').addEventListener('click', checkTuner);
   ipInput.addEventListener('change', checkTuner);
 
+  // ---- Signal scan -----------------------------------------------------------------
+
+  async function scanSignal() {
+    const button = $('scanSignal');
+    const result = $('signalResult');
+    button.disabled = true;
+    try {
+      await postJSON('/api/signal/scan', {});
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const { channels, scan } = await getJSON('/api/signal');
+        if (scan.scanning) {
+          result.textContent = 'Checking… ' + scan.done + ' of ' + scan.total + ' channels';
+          result.className = 'field-note';
+          continue;
+        }
+        const all = Object.entries(channels);
+        const weak = all.filter(([, s]) => s.locked && s.weak).map(([n]) => n);
+        const none = all.filter(([, s]) => !s.locked).map(([n]) => n);
+        result.textContent = '✓ Checked ' + all.length + ' channels. ' +
+          (weak.length ? 'Weak: ' + weak.join(', ') + '. ' : '') +
+          (none.length ? 'No signal: ' + none.join(', ') + '.' : '') +
+          (!weak.length && !none.length ? 'All good.' : '');
+        result.className = 'field-note ' + (weak.length || none.length ? 'warn' : 'ok');
+        break;
+      }
+    } catch (e) {
+      result.textContent = e.message;
+      result.className = 'field-note bad';
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  if ($('scanSignal')) $('scanSignal').addEventListener('click', scanSignal);
+
   // ---- Time zone ----------------------------------------------------------------
 
   const tzSelect = $('timezone');
@@ -123,6 +159,7 @@
     const v = (id) => ($(id) ? $(id).value.trim() : '');
     return {
       hdhr_ip: v('hdhrIp'), zip_code: v('zipCode'), timezone: tzSelect.value, recordings: v('recordings'),
+      quality: v('quality'),
       distant_channels: Array.from(document.querySelectorAll('#distantList input:checked')).map((c) => c.value),
       jellyfin: { url: v('jfUrl'), api_key: v('jfKey'), recordings_path: v('jfPath') },
       jellyseerr: { url: v('jsUrl'), api_key: v('jsKey') },
