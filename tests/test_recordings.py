@@ -40,3 +40,28 @@ def test_already_recorded_matches_number_or_title(dvr):
 def test_unique_path_never_overwrites(dvr, tmp_path):
     open(tmp_path / "Show.mp4", "w").close()
     assert dvr._unique_path(str(tmp_path), "Show", ".mp4").endswith("Show (2).mp4")
+
+
+def test_lavfi_escape(dvr):
+    # Two escaping levels: ':' and "'" get \ at the option level, then \ ' and ; get \ at the graph level
+    assert dvr._lavfi_escape("pipe:0") == "pipe\\\\:0"
+    assert dvr._lavfi_escape("SNL - Brunson; KATSEYE's") == "SNL - Brunson\\; KATSEYE\\\\\\'s"
+
+
+class _DoneProc:
+    def wait(self, timeout=None):
+        return 0
+
+
+def test_captions_cleanup(dvr, tmp_path):
+    cap = dvr.CaptionCapture.__new__(dvr.CaptionCapture)
+    cap.proc = _DoneProc()
+    cap.path = str(tmp_path / "show.en.srt")
+    with open(cap.path, "w", encoding="utf-8") as f:
+        f.write('1\n00:00:01,969 --> 00:00:05,105\n<font face="Monospace">{\\an7}\\hover and over</font>\n\n')
+    assert cap.finish() == cap.path
+    assert open(cap.path, encoding="utf-8").read() == "1\n00:00:01,969 --> 00:00:05,105\nover and over\n\n"
+    # A channel with no captions leaves an empty file, which isn't worth keeping
+    with open(cap.path, "w", encoding="utf-8") as f:
+        f.write("")
+    assert cap.finish() is None and not os.path.exists(cap.path)

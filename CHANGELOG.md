@@ -5,6 +5,12 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Closed captions are saved as `<recording>.en.srt` beside each recording, so Jellyfin, Plex and Kodi offer them as subtitles. They're read from the broadcast as it airs. Turn off with `recording.captions: false`.
+- The status card says "Finishing…" while a stopped or ended recording is being saved.
+
 ## [3.0.0] - 2026-09-27
 
 A rebuilt LineDrive: Docker-first, a real program guide, and a DVR you can talk to.

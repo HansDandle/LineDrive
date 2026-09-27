@@ -70,14 +70,16 @@
     const recs = s.recording || [];
     statusCard.classList.toggle('is-recording', recs.length > 0);
     statusCard.classList.toggle('is-idle', recs.length === 0);
-    $('stopBtn').hidden = recs.length === 0;
+    // Stop does nothing more once every recording is already being finalized
+    $('stopBtn').hidden = !recs.some((r) => !r.finishing);
 
     if (recs.length) {
-      const r = recs[0];
-      $('statusLabel').textContent = recs.length > 1 ? 'Recording ' + recs.length + ' shows' : 'Recording now';
+      const r = recs.find((x) => !x.finishing) || recs[0];
+      $('statusLabel').textContent = recs.length > 1 ? 'Recording ' + recs.length + ' shows'
+        : r.finishing ? 'Finishing…' : 'Recording now';
       $('statusTitle').textContent = r.title || 'Channel ' + r.channel_number;
       $('statusSub').textContent = r.channel_number + ' · ' + r.channel_name + ' · ' +
-        r.minutes_left + ' min left';
+        (r.finishing ? 'saving the file, this can take a few minutes' : r.minutes_left + ' min left');
     } else if (s.next) {
       const n = s.next;
       $('statusLabel').textContent = 'Up next';

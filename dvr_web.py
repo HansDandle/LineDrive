@@ -590,6 +590,76 @@ RECORDING_FAILURES = []  # recent recordings that couldn't start or died, newest
 class RecordingFailed(Exception):
     pass
 
+def _lavfi_escape(value):
+    """Escape a filter option value inside a filtergraph (option level, then graph level)"""
+    for ch in "\\':":
+        value = value.replace(ch, '\\' + ch)
+    return ''.join('\\' + ch if ch in "\\'[],;" else ch for ch in value)
+
+class CaptionCapture:
+    """Saves a recording's closed captions as <recording>.en.srt, which Jellyfin/Plex/Kodi list as a
+    subtitle track (the captions ffmpeg carries into the H.264 video mostly aren't). The recording's
+    ffmpeg also copies the untouched broadcast video to its stdout and a second ffmpeg reads the
+    captions from that as it airs. Reading them back out of the finished MP4 means decoding all of
+    it again, 20 minutes for a 100-minute show. Data goes through a queue that drops when full, so
+    a stalled caption process can never hold up the recording."""
+
+    TAGS = re.compile(r'</?font[^>]*>|\{\\an\d\}|\\h')
+
+    def __init__(self, ffmpeg_bin, video_path):
+        import queue
+        self._full = queue.Full
+        self.path = os.path.splitext(video_path)[0] + '.en.srt'
+        self.queue = queue.Queue(maxsize=256)  # 64 KB chunks, several seconds of video
+        self.proc = subprocess.Popen(
+            [ffmpeg_bin, '-v', 'fatal', '-y', '-f', 'lavfi',
+             '-i', f"movie={_lavfi_escape('pipe:0')}:f=mpegts[out0+subcc]",
+             '-map', '0:s', '-c:s', 'srt', self.path],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        threading.Thread(target=self._feed, daemon=True).start()
+
+    def _feed(self):
+        while (chunk := self.queue.get()) is not None:
+            try:
+                self.proc.stdin.write(chunk)
+            except OSError:
+                break  # caption process died; pump() keeps draining and dropping
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+
+    def pump(self, stream):
+        """Drain the recording's video copy until that ffmpeg exits"""
+        for chunk in iter(lambda: stream.read(65536), b''):
+            try:
+                self.queue.put_nowait(chunk)
+            except self._full:
+                pass
+        try:
+            self.queue.put(None, timeout=30)
+        except self._full:
+            pass
+
+    def finish(self):
+        """Wait for the captions file, strip roll-up positioning, drop it if the show had none"""
+        try:
+            self.proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait()
+        try:
+            with open(self.path, encoding='utf-8', errors='replace') as f:
+                text = self.TAGS.sub('', f.read())
+            if not re.search(r'[A-Za-z]', re.sub(r'[\d:,\->\s]', '', text)):
+                os.remove(self.path)
+                return None
+            with open(self.path, 'w', encoding='utf-8') as f:
+                f.write(text)
+            return self.path
+        except OSError:
+            return None
+
 def _explain_ffmpeg_failure(tail):
     text = '\n'.join(tail)
     if '503' in text:
@@ -901,6 +971,9 @@ def record_channel(channel_key, duration_min, crf=23, preset="fast", record_form
         try:
             if os.path.exists(filepath) and os.path.getsize(filepath) < 1024 * 1024:
                 os.remove(filepath)
+                srt = os.path.splitext(filepath)[0] + '.en.srt'
+                if os.path.exists(srt):
+                    os.remove(srt)
         except OSError:
             pass
     finally:
@@ -927,15 +1000,26 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
             "-c:v", "libx264", "-preset", preset, "-crf", str(crf),
             "-c:a", "ac3", "-b:a", "192k", "-y", filepath
         ]
+    # Config recording.captions (default on): also save closed captions as a .srt beside the video
+    captions = None
+    if config.get('recording', 'captions', True):
+        try:
+            captions = CaptionCapture(ffmpeg_bin, filepath)
+            cmd += ["-map", "0:v:0", "-c", "copy", "-t", str(duration_min*60), "-f", "mpegts", "pipe:1"]
+        except OSError as e:
+            print(f"[Recording] Captions off for this recording: {e}")
 
     # Each recording watches its own process; current_process only feeds the legacy /progress view
     # (several tuners can record at once, and a shared handle made one thread watch another's ffmpeg)
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE if captions else subprocess.DEVNULL, stderr=subprocess.PIPE)
     current_process = proc
+    if captions:
+        threading.Thread(target=captions.pump, args=(proc.stdout,), daemon=True).start()
     tail = []  # last ffmpeg output lines, to explain a failure
 
     def stream_output(p):
-        for line in iter(p.stdout.readline, b''):
+        for line in iter(p.stderr.readline, b''):
             if not line:
                 break
             text = line.decode(errors='ignore').strip()
@@ -949,6 +1033,8 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
     while proc.poll() is None:
         if stop_event.is_set():
             stopped = True
+            # ffmpeg now rewrites the file with its index up front, which takes minutes for a long show
+            ACTIVE_RECORDINGS.get(os.path.basename(filepath), {})['finishing'] = True
             try:
                 proc.stdin.write(b'q\n')
                 proc.stdin.flush()
@@ -961,6 +1047,8 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
     reader.join(timeout=2)
     if current_process is proc:
         current_process = None
+    if captions and captions.finish():
+        print(f"[Recording] Saved captions: {os.path.basename(captions.path)}")
     failed = proc.returncode != 0 and not stopped
     reason = _explain_ffmpeg_failure(tail) if failed else None
     # Attempt to mark matching scheduled job as completed (or failed)
@@ -4468,7 +4556,8 @@ def api_status():
     recording = []
     for rec in list(ACTIVE_RECORDINGS.values()):
         ends = datetime.fromisoformat(rec['ends_at'])
-        rec = dict(rec, minutes_left=max(0, int((ends - now).total_seconds() // 60) + 1))
+        rec = dict(rec, minutes_left=max(0, int((ends - now).total_seconds() // 60) + 1),
+                   finishing=bool(rec.get('finishing')) or now >= ends)
         if not rec['title'] and EPG_CACHE.get('data'):
             # Manual recordings have no title; show what the guide says is on
             for p in EPG_CACHE['data']:

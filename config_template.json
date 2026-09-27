@@ -20,7 +20,8 @@
   },
   "recording": {
     "sports_overrun_minutes": 30,
-    "comment": "Extra minutes added to a recording when live sports aired on the same channel in the 3 hours before it (games run long and push later shows back). 0 turns it off."
+    "captions": true,
+    "comment": "sports_overrun_minutes: extra minutes added to a recording when live sports aired on the same channel in the 3 hours before it (games run long and push later shows back); 0 turns it off. captions: save the broadcast's closed captions as <recording>.en.srt beside the video."
   },
   "web_interface": {
     "host": "0.0.0.0",
