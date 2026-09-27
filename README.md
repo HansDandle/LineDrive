@@ -25,7 +25,7 @@ plain-English questions ("when's the next basketball game?"), and recordings you
   - "record Abbott Elementary when it comes back" (it watches the guide and starts recording when the new season shows up)
 - **Series that don't waste tuners.** "New episodes only" follows each first-run episode wherever it airs (preemptions, sister stations), skips reruns, and skips episodes you already have.
 - **Recordings your media server understands.** `TV/<Show>/Season 52/Show - S52E01 - Episode Title.mp4` (or air-date names), `Movies/<Title (Year)>/`, plus a `.nfo` with the plot and air date. Jellyfin, Emby, Kodi and Plex pick them up with proper titles.
-- **Tuner-aware.** Refuses to "record" when both tuners are busy (and tells you who has them), reports failed recordings, and has a **kill switch** for streams other apps leave open (hello, Jellyfin live TV).
+- **Tuner-aware.** Refuses to "record" when every tuner is busy (and tells you who has them), reports failed recordings, and has a **kill switch** for streams other apps leave open (hello, Jellyfin live TV).
 - **Integrations (all optional):**
   - **Jellyfin:** new recordings appear seconds after they finish.
   - **Jellyseerr:** "download Dune" or "get season 2 of The Bear" sends a request to Radarr/Sonarr.
@@ -34,6 +34,12 @@ plain-English questions ("when's the next basketball game?"), and recordings you
 | Guide | Fire TV mode | Ask LineDrive | Phone |
 |---|---|---|---|
 | ![Guide](docs/screenshots/guide.png) | ![Fire TV](docs/screenshots/guide-tv.png) | ![Ask](docs/screenshots/ask.png) | ![Phone](docs/screenshots/phone.png) |
+
+## Compatibility
+
+- **Any number of tuners.** LineDrive reads the tuner count from the device: DUO, QUATRO, FLEX 4K, SCRIBE and so on. Each recording takes whichever tuner is free.
+- **One HDHomeRun at a time** for now. Several devices on one network aren't combined yet.
+- **ATSC 1.0 channels** are what it's tested on. On ATSC 3.0 (NextGen TV) tuners such as the FLEX 4K, DRM-protected 3.0 stations can't be recorded by any third-party app, and unencrypted 3.0 stations are untested (their AC-4 audio may not decode in FFmpeg). The ATSC 1.0 simulcasts of the same stations work normally.
 
 ## Quick start (Docker)
 
@@ -131,7 +137,7 @@ With MQTT set up, LineDrive shows up as a device:
 
 ## Troubleshooting
 
-- **"Both tuners are in use."** Another app (Jellyfin/Plex live TV, the HDHomeRun app, Channels) has them. The status card shows what's on each tuner; **Free up** releases one another app left open. In Jellyfin, setting the tuner's simultaneous-stream limit to 1 keeps a tuner free for LineDrive.
+- **"All tuners are in use."** Another app (Jellyfin/Plex live TV, the HDHomeRun app, Channels) has them. The status card shows what's on each tuner; **Free up** releases one another app left open. In Jellyfin, setting the tuner's simultaneous-stream limit to 1 keeps a tuner free for LineDrive.
 - **Guide is empty.** Check the ZIP code with **Test** in Settings. Listings are US over-the-air only.
 - **Times are off by an hour or more.** In Docker, set `TZ`. Otherwise leave Time zone on "this computer's".
 - **Can't reach `http://<this PC's IP>:5050` from the same Windows PC** (other devices work): that's Docker Desktop with WSL "mirrored" networking. Use `http://localhost:5050` on that PC, or add `hostAddressLoopback=true` under `[experimental]` in `%UserProfile%\.wslconfig`.

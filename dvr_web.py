@@ -593,7 +593,7 @@ class RecordingFailed(Exception):
 def _explain_ffmpeg_failure(tail):
     text = '\n'.join(tail)
     if '503' in text:
-        return 'No free tuner (both were in use)'
+        return 'No free tuner (all were in use)'
     if '404' in text:
         return 'The tuner doesn’t have that channel'
     if 'Connection refused' in text or 'timed out' in text.lower() or 'Connection timed out' in text:
@@ -638,7 +638,8 @@ def no_tuner_message():
     """A reason to refuse starting a recording right now, or None if a tuner is free"""
     free, busy = tuner_usage()
     if free == 0:
-        return f"Both tuners are in use ({', '.join(busy)}). Stop one of those to record this."
+        what = "Both tuners are" if len(busy) == 2 else f"All {len(busy)} tuners are" if len(busy) > 1 else "The tuner is"
+        return f"{what} in use ({', '.join(busy)}). Stop one of those to record this."
     return None
 
 _LIBRARY_CACHE = {'at': 0, 'index': set()}
@@ -928,7 +929,7 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
         ]
 
     # Each recording watches its own process; current_process only feeds the legacy /progress view
-    # (two tuners can record at once, and a shared handle made one thread watch the other's ffmpeg)
+    # (several tuners can record at once, and a shared handle made one thread watch another's ffmpeg)
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     current_process = proc
     tail = []  # last ffmpeg output lines, to explain a failure
