@@ -1,0 +1,10 @@
+# LineDrive - Python dependencies
+# FFmpeg must be installed separately and on the PATH (the Docker image includes it).
+
+flask>=2.3.0
+waitress>=3.0          # production web server
+requests>=2.28.0
+schedule>=1.2.0
+beautifulsoup4>=4.11.0
+pytz>=2023.3
+paho-mqtt>=2.0         # Home Assistant integration (MQTT auto-discovery)

@@ -1,0 +1,21 @@
+# LineDrive with Docker Compose
+#   1. Set TZ and the recordings folder below
+#   2. docker compose up -d
+#   3. Open http://<your-server>:5050 and follow the setup page
+services:
+  linedrive:
+    image: ghcr.io/hansdandle/linedrive:latest
+    # build: .                      # or build from a clone of the repo
+    container_name: linedrive
+    environment:
+      - TZ=America/New_York         # your time zone: guide times and the recording schedule use it
+      # - HOST_IP=192.168.1.10      # this server's LAN address (labels which tuner streams are LineDrive's)
+    volumes:
+      - ./config:/config            # settings, schedule and guide cache
+      - ./recordings:/recordings    # TV/<Show>/Season NN/..., Movies/<Title (Year)>/...
+    ports:
+      - "5050:5050"
+    restart: unless-stopped
+    # Linux only: host networking lets the setup page find your HDHomeRun automatically.
+    # (With it, remove the "ports:" section above.)
+    # network_mode: host

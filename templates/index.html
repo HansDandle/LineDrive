@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0c1421" />
+    <link rel="manifest" href="/static/manifest.json" />
+    <link rel="icon" type="image/jpeg" href="/static/LineDrive Logo.jpg" />
+    <link rel="stylesheet" href="/static/style.css?v={{ cache_bust }}" />
+    <title>LineDrive</title>
+</head>
+<body>
+    <header class="topbar">
+        <a href="/" class="brand">
+            <img src="/static/LineDrive Logo.jpg" alt="" />
+            <span>LineDrive</span>
+        </a>
+        <nav class="nav">
+            <a href="/" class="nav-link" aria-current="page">Home</a>
+            <a href="/guide" class="nav-link">Guide</a>
+        </nav>
+        <a href="/setup" class="icon-btn" title="Settings" aria-label="Settings">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.6a.5.5 0 0 0 .1-.6l-1.9-3.3a.5.5 0 0 0-.6-.2l-2.4 1a7.3 7.3 0 0 0-1.7-1l-.4-2.5a.5.5 0 0 0-.5-.4h-3.8a.5.5 0 0 0-.5.4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.4-1a.5.5 0 0 0-.6.2L2.6 8.8a.5.5 0 0 0 .1.6l2 1.6a7.5 7.5 0 0 0 0 2l-2 1.6a.5.5 0 0 0-.1.6l1.9 3.3c.1.2.4.3.6.2l2.4-1c.5.4 1.1.7 1.7 1l.4 2.5c0 .3.2.4.5.4h3.8c.3 0 .5-.1.5-.4l.4-2.6c.6-.2 1.2-.6 1.7-1l2.4 1c.2.1.5 0 .6-.2l1.9-3.3a.5.5 0 0 0-.1-.6l-2-1.5ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
+        </a>
+    </header>
+
+    <main class="page">
+        <!-- Live status: recording now / up next -->
+        <section id="statusCard" class="card status-card area-status" aria-live="polite">
+            <div class="status-main">
+                <span id="statusDot" class="status-dot"></span>
+                <div class="status-text">
+                    <p id="statusLabel" class="eyebrow">Checking…</p>
+                    <p id="statusTitle" class="status-title"></p>
+                    <p id="statusSub" class="muted"></p>
+                    <ul id="tunerList" class="tuners" aria-label="Tuners"></ul>
+                </div>
+            </div>
+            <div id="noticeBox" class="failure notice" role="status" hidden>
+                <div id="noticeList"></div>
+                <button type="button" id="dismissNotices" class="btn btn-quiet btn-sm">OK</button>
+            </div>
+            <div id="failureBox" class="failure" role="alert" hidden>
+                <div id="failureList"></div>
+                <button type="button" id="dismissFailures" class="btn btn-quiet btn-sm">Dismiss</button>
+            </div>
+            <div class="status-actions">
+                <button type="button" id="stopBtn" class="btn btn-danger" hidden>Stop recording</button>
+                <a href="/guide" class="btn btn-ghost">Open guide</a>
+            </div>
+        </section>
+
+        <!-- Search/download results from commands -->
+        <section id="torrentResults" class="card area-results torrent-results" hidden></section>
+
+        <div class="col col-side">
+        <!-- Natural-language commands -->
+        <section class="card area-ask">
+            <h2>Ask LineDrive</h2>
+            <form id="nlpForm" class="ask-form">
+                <input type="text" id="commandInput" placeholder="When is the next basketball game?" autocomplete="off" required aria-label="Ask a question or give a command" />
+                <button type="button" id="micBtn" class="icon-btn" title="Speak" aria-label="Speak a command">
+                    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1a7 7 0 0 0 6-6.9h-2Z"/></svg>
+                </button>
+                <button type="submit" class="btn btn-primary">Send</button>
+            </form>
+            <div class="suggestions" aria-label="Examples">
+                <button type="button" class="chip" data-ask="What's on now?">What's on now?</button>
+                <button type="button" class="chip" data-ask="What's on at 8 tonight?">On at 8 tonight</button>
+                <button type="button" class="chip" data-ask="Any movies this weekend?">Movies this weekend</button>
+                <button type="button" class="chip" data-ask="Is there sports on tomorrow?">Sports tomorrow</button>
+            </div>
+            <div id="result" class="result" hidden></div>
+        </section>
+        </div>
+
+        <div class="col col-main">
+        <!-- Upcoming -->
+        <section class="card area-upcoming">
+            <div class="card-head">
+                <h2>Upcoming</h2>
+                <span id="upcomingCount" class="count"></span>
+            </div>
+            <ul id="upcomingList" class="upcoming"><li class="muted">Loading…</li></ul>
+            <div id="upcomingEmpty" class="empty" hidden>
+                <p>Nothing scheduled.</p>
+                <a href="/guide" class="btn btn-primary">Find something in the guide</a>
+            </div>
+        </section>
+
+        <!-- Recent files -->
+        <section class="card area-recent">
+            <div class="card-head">
+                <h2>Recently recorded</h2>
+                <button type="button" id="openFolderBtn" class="btn btn-quiet btn-sm" title="Opens the folder on the LineDrive PC">Open folder</button>
+            </div>
+            <ul id="recentList" class="recent"><li class="muted">Loading…</li></ul>
+        </section>
+        </div>
+
+        <div class="col col-side col-side-2">
+        <!-- Manual recording -->
+        <section class="card area-manual">
+            <h2>Record a channel</h2>
+            <div class="field">
+                <label for="channel">Channel</label>
+                <select id="channel">
+                    {% if channels %}
+                        <option value="">Choose a channel</option>
+                        {% for num, name in channels.items() %}
+                        <option value="{{ num }}">{{ num }} · {{ name }}</option>
+                        {% endfor %}
+                    {% else %}
+                        <option value="" disabled selected>No tuner channels found</option>
+                    {% endif %}
+                </select>
+                {% if not channels %}<p class="field-note">Check the HDHomeRun address in Settings.</p>{% endif %}
+            </div>
+
+            <div class="tabs" role="tablist">
+                <button type="button" role="tab" class="tab" id="tabNow" aria-selected="true" aria-controls="panelNow">Now</button>
+                <button type="button" role="tab" class="tab" id="tabRepeat" aria-selected="false" aria-controls="panelRepeat">On a schedule</button>
+            </div>
+
+            <div id="panelNow" role="tabpanel" aria-labelledby="tabNow" class="tabpanel">
+                <div class="field">
+                    <label for="duration">Length</label>
+                    <div class="with-suffix"><input type="number" id="duration" value="30" min="1" max="600" inputmode="numeric" /><span>min</span></div>
+                </div>
+                <button type="button" id="recordNowBtn" class="btn btn-record">Start recording</button>
+            </div>
+
+            <div id="panelRepeat" role="tabpanel" aria-labelledby="tabRepeat" class="tabpanel" hidden>
+                <fieldset class="field">
+                    <legend>Days</legend>
+                    <div class="days">
+                        {% for day in days %}
+                        <label class="day-chip"><input type="checkbox" name="days" value="{{ day }}" /><span>{{ day }}</span></label>
+                        {% endfor %}
+                    </div>
+                </fieldset>
+                <div class="field-row">
+                    <div class="field">
+                        <label for="time">Start</label>
+                        <input type="time" id="time" value="20:00" />
+                    </div>
+                    <div class="field">
+                        <label for="repeatDuration">Length</label>
+                        <div class="with-suffix"><input type="number" id="repeatDuration" value="30" min="1" max="600" inputmode="numeric" /><span>min</span></div>
+                    </div>
+                </div>
+                <button type="button" id="scheduleBtn" class="btn btn-primary">Save schedule</button>
+            </div>
+
+            <details class="advanced">
+                <summary>Encoding</summary>
+                <div class="field-row">
+                    <div class="field">
+                        <label for="format">Format</label>
+                        <select id="format">
+                            <option value="mp4" selected>MP4</option>
+                            <option value="ts">TS</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="crf">Quality (CRF)</label>
+                        <input type="number" id="crf" value="23" min="0" max="51" inputmode="numeric" />
+                    </div>
+                    <div class="field">
+                        <label for="preset">Speed</label>
+                        <select id="preset">
+                            {% for p in ['ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow'] %}
+                            <option value="{{ p }}"{% if p == 'fast' %} selected{% endif %}>{{ p }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <p class="field-note">Lower CRF means higher quality and bigger files. Slower presets make smaller files but use more CPU.</p>
+            </details>
+        </section>
+
+        {% if torrent_enabled %}
+        <section class="card area-tools">
+            <h2>Downloads</h2>
+            <button type="button" id="autoCategorizeBtn" class="btn btn-ghost">Auto-categorize torrents</button>
+        </section>
+        {% endif %}
+        </div>
+    </main>
+
+    <footer class="footer">
+        <p><strong>Legal use only.</strong> Record over-the-air content you're entitled to receive, and follow copyright law.</p>
+        <p>LineDrive is an independent open-source project, not affiliated with Silicondust USA Inc. HDHomeRun is a registered trademark of Silicondust USA Inc.</p>
+    </footer>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/static/js/app.js?v={{ cache_bust }}"></script>
+</body>
+</html>

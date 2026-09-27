@@ -1,0 +1,118 @@
+# Ignore Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Configuration files (user-specific)
+config.json
+config_user.json
+
+# Log files
+*.log
+logs/
+
+# Recording directories (these will be user-specific)
+TV_Recordings/
+recordings/
+
+# Scheduled jobs data
+scheduled_jobs.json
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+
+# Windows specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# macOS specific  
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux specific
+*~
+
+# FFmpeg binaries (user should install separately)
+ffmpeg.exe
+ffmpeg
+
+# API keys and secrets (should be in config)
+.env
+secrets.json
+api_keys.txt
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup
+config.json.bak
+
+# Test coverage
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Documentation build
+docs/_build/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+# LineDrive runtime data
+data/
+config/

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0c1421" />
+    <link rel="manifest" href="/static/manifest.json" />
+    <link rel="icon" type="image/jpeg" href="/static/LineDrive Logo.jpg" />
+    <link rel="stylesheet" href="/static/guide.css?v={{ cache_bust }}" />
+    <title>LineDrive Guide</title>
+</head>
+<body>
+    <header class="guide-header">
+        <div class="brand">
+            <a href="/" class="home-link" title="Back to LineDrive">
+                <img src="/static/LineDrive Logo.jpg" alt="" />
+                <span>LineDrive</span>
+            </a>
+            <h1>Guide</h1>
+        </div>
+        <div class="controls">
+            <nav id="days" class="days" aria-label="Day"></nav>
+            <div class="tools">
+                <input id="search" type="search" placeholder="Find a show" autocomplete="off" aria-label="Find a show" />
+                <button id="nowBtn" type="button" class="btn-ghost">Now</button>
+            </div>
+        </div>
+    </header>
+
+    <main id="grid" class="grid" tabindex="-1">
+        <div id="status" class="status">Loading guide…</div>
+    </main>
+
+    <aside id="panel" class="panel" aria-hidden="true">
+        <button id="panelClose" class="panel-close" type="button" aria-label="Close">×</button>
+        <div class="panel-body">
+            <p id="pChannel" class="p-channel"></p>
+            <h2 id="pTitle"></h2>
+            <p id="pEpisode" class="p-episode"></p>
+            <p id="pWhen" class="p-when"></p>
+            <p id="pMeta" class="p-meta"></p>
+            <p id="pRecording" class="p-recording"></p>
+            <p id="pDesc" class="p-desc"></p>
+            <div id="pActions" class="p-actions"></div>
+        </div>
+    </aside>
+    <div id="scrim" class="scrim"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="/static/js/guide.js?v={{ cache_bust }}"></script>
+</body>
+</html>

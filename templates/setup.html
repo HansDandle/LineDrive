@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0c1421" />
+    <link rel="icon" type="image/jpeg" href="/static/LineDrive Logo.jpg" />
+    <link rel="stylesheet" href="/static/style.css?v={{ cache_bust }}" />
+    <title>LineDrive Settings</title>
+</head>
+<body>
+    <header class="topbar">
+        <a href="/" class="brand">
+            <img src="/static/LineDrive Logo.jpg" alt="" />
+            <span>LineDrive</span>
+        </a>
+        <nav class="nav">
+            {% if not first_run %}
+            <a href="/" class="nav-link">Home</a>
+            <a href="/guide" class="nav-link">Guide</a>
+            {% endif %}
+            <a href="/setup" class="nav-link" aria-current="page">Settings</a>
+        </nav>
+    </header>
+
+    <main class="setup">
+        {% if first_run %}
+        <section class="card intro">
+            <h2>Welcome to LineDrive</h2>
+            <p class="muted">Two things and you're recording: pick your HDHomeRun and enter your ZIP code for the TV guide. Everything else is optional.</p>
+        </section>
+        {% endif %}
+
+        <form id="setupForm" autocomplete="off">
+            <!-- Tuner -->
+            <section class="card">
+                <h2>HDHomeRun</h2>
+                <div id="devices" class="devices"><p class="muted">Looking for tuners on your network…</p></div>
+                <div class="field">
+                    <label for="hdhrIp">Tuner address</label>
+                    <div class="inline">
+                        <input type="text" id="hdhrIp" value="{{ settings.hdhr_ip }}" placeholder="e.g. 192.168.1.50" required />
+                        <button type="button" id="checkTuner" class="btn">Check</button>
+                    </div>
+                    <p id="tunerResult" class="field-note"></p>
+                    {% if in_docker %}<p class="field-note">In Docker, automatic discovery only works if the container can reach your network (host networking) or the device is registered with SiliconDust. Otherwise type the address from the HDHomeRun app or your router.</p>{% endif %}
+                </div>
+                <fieldset id="distantBox" class="field" hidden>
+                    <legend>Out-of-market stations <span class="muted">(optional)</span></legend>
+                    <p class="field-note">If your antenna also picks up another city's stations, tick them. When a local station carries the same show, LineDrive prefers the local one.</p>
+                    <div id="distantList" class="checks"></div>
+                </fieldset>
+            </section>
+
+            <!-- Guide -->
+            <section class="card">
+                <h2>TV guide</h2>
+                <div class="field">
+                    <label for="zipCode">ZIP code</label>
+                    <div class="inline">
+                        <input type="text" id="zipCode" value="{{ settings.zip_code }}" inputmode="numeric" maxlength="5" placeholder="5-digit ZIP" required />
+                        <button type="button" class="btn test-btn" data-kind="zip">Test</button>
+                    </div>
+                    <p class="field-note" data-result="zip">Guide data comes from Gracenote's free over-the-air listings for your area.</p>
+                </div>
+                <div class="field">
+                    <label for="timezone">Time zone</label>
+                    <select id="timezone" data-value="{{ settings.timezone }}">
+                        <option value="">This computer's time zone</option>
+                    </select>
+                    <p class="field-note" id="tzNote"></p>
+                </div>
+            </section>
+
+            <!-- Recordings -->
+            <section class="card">
+                <h2>Recordings</h2>
+                {% if in_docker %}
+                <p class="muted">Recordings are saved to <code>/recordings</code> in the container. Map it to a folder on your server in <code>docker-compose.yml</code>.</p>
+                {% else %}
+                <div class="field">
+                    <label for="recordings">Recordings folder</label>
+                    <input type="text" id="recordings" value="{{ settings.recordings }}" placeholder="~/TV_Recordings" />
+                    <p class="field-note">Shows go to <code>TV/&lt;Show&gt;/Season NN/</code> and movies to <code>Movies/&lt;Title (Year)&gt;/</code>, the layout Jellyfin and Plex expect.</p>
+                </div>
+                {% endif %}
+            </section>
+
+            <!-- Optional integrations -->
+            <section class="card">
+                <h2>Integrations <span class="muted small">(optional)</span></h2>
+
+                <details class="integration" {% if settings.jellyfin.url %}open{% endif %}>
+                    <summary>Jellyfin <span class="muted small">new recordings appear right away</span></summary>
+                    <div class="field-row">
+                        <div class="field"><label for="jfUrl">Server URL</label><input type="text" id="jfUrl" value="{{ settings.jellyfin.url or '' }}" placeholder="http://192.168.1.10:8096" /></div>
+                        <div class="field"><label for="jfKey">API key</label><input type="password" id="jfKey" value="{{ settings.jellyfin.api_key or '' }}" placeholder="Dashboard → API Keys" /></div>
+                        <div class="field"><label for="jfPath">Recordings folder as Jellyfin sees it</label><input type="text" id="jfPath" value="{{ settings.jellyfin.recordings_path or '/recordings' }}" /></div>
+                    </div>
+                    <button type="button" class="btn btn-sm test-btn" data-kind="jellyfin">Test Jellyfin</button>
+                    <p class="field-note" data-result="jellyfin"></p>
+                </details>
+
+                <details class="integration" {% if settings.jellyseerr.url %}open{% endif %}>
+                    <summary>Jellyseerr <span class="muted small">“download Dune” requests via Radarr/Sonarr</span></summary>
+                    <div class="field-row">
+                        <div class="field"><label for="jsUrl">Server URL</label><input type="text" id="jsUrl" value="{{ settings.jellyseerr.url or '' }}" placeholder="http://192.168.1.10:5055" /></div>
+                        <div class="field"><label for="jsKey">API key</label><input type="password" id="jsKey" value="{{ settings.jellyseerr.api_key or '' }}" placeholder="Settings → General → API Key" /></div>
+                    </div>
+                    <button type="button" class="btn btn-sm test-btn" data-kind="jellyseerr">Test Jellyseerr</button>
+                    <p class="field-note" data-result="jellyseerr"></p>
+                </details>
+
+                <details class="integration" {% if settings.mqtt.host %}open{% endif %}>
+                    <summary>Home Assistant (MQTT) <span class="muted small">sensors and buttons appear automatically</span></summary>
+                    <div class="field-row">
+                        <div class="field"><label for="mqHost">Broker host</label><input type="text" id="mqHost" value="{{ settings.mqtt.host or '' }}" placeholder="192.168.1.10" /></div>
+                        <div class="field"><label for="mqPort">Port</label><input type="number" id="mqPort" value="{{ settings.mqtt.port or 1883 }}" /></div>
+                        <div class="field"><label for="mqUser">Username</label><input type="text" id="mqUser" value="{{ settings.mqtt.username or '' }}" /></div>
+                        <div class="field"><label for="mqPass">Password</label><input type="password" id="mqPass" value="{{ settings.mqtt.password or '' }}" /></div>
+                    </div>
+                    <button type="button" class="btn btn-sm test-btn" data-kind="mqtt">Test MQTT</button>
+                    <p class="field-note" data-result="mqtt"></p>
+                </details>
+            </section>
+
+            <div class="save-bar">
+                <button type="submit" id="saveBtn" class="btn btn-primary">{{ 'Start using LineDrive' if first_run else 'Save settings' }}</button>
+                <p id="saveResult" class="field-note"></p>
+            </div>
+        </form>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script>window.LINEDRIVE_SETTINGS = {{ settings|tojson }};</script>
+    <script src="/static/js/setup.js?v={{ cache_bust }}"></script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+{
+  "hdhr": {
+    "ip_address": "",
+    "comment": "Your HDHomeRun's IP address (the Settings page can find it)"
+  },
+  "epg": {
+    "zip_code": "",
+    "headend_id": "",
+    "timezone": "",
+    "refresh_interval": 24,
+    "comment": "zip_code picks your over-the-air guide. Leave headend_id empty (it becomes USA-OTA<zip>-DEFAULT). Leave timezone empty to use this machine's (in Docker, the TZ variable). refresh_interval is in hours."
+  },
+  "directories": {
+    "recordings": "~/TV_Recordings",
+    "comment": "Where recordings go: TV/<Show>/Season NN/, Movies/<Title (Year)>/, Other/. In Docker this is /recordings."
+  },
+  "ffmpeg": {
+    "path": "ffmpeg",
+    "comment": "'ffmpeg' if it's on your PATH, otherwise the full path"
+  },
+  "recording": {
+    "sports_overrun_minutes": 30,
+    "comment": "Extra minutes added to a recording when live sports aired on the same channel in the 3 hours before it (games run long and push later shows back). 0 turns it off."
+  },
+  "web_interface": {
+    "host": "0.0.0.0",
+    "port": 5050,
+    "debug": false
+  },
+  "guide": {
+    "distant_channels": [],
+    "comment": "Major channel numbers of out-of-market stations your antenna also picks up (e.g. [\"4\", \"5\"]). When a local station carries the same show, LineDrive prefers the local one."
+  },
+  "jellyfin": {
+    "url": "",
+    "api_key": "",
+    "recordings_path": "/recordings",
+    "comment": "Optional. With an API key, Jellyfin rescans as soon as a recording finishes. recordings_path is the recordings folder as Jellyfin sees it."
+  },
+  "jellyseerr": {
+    "url": "",
+    "api_key": "",
+    "comment": "Optional. Lets Ask LineDrive request movies/shows ('download dune') through Jellyseerr -> Radarr/Sonarr."
+  },
+  "mqtt": {
+    "host": "",
+    "port": 1883,
+    "username": "",
+    "password": "",
+    "discovery_prefix": "homeassistant",
+    "comment": "Optional. Home Assistant integration via MQTT auto-discovery."
+  },
+  "features": {
+    "torrent_downloads": false,
+    "comment": "Legacy torrent search/download/VPN commands (the prowlarr, indexer, torrent_client and vpn sections). Off by default."
+  },
+  "prowlarr": {
+    "enabled": false,
+    "api_url": "http://127.0.0.1:9696",
+    "api_key": "",
+    "timeout": 15
+  },
+  "indexer": {
+    "enabled": false,
+    "provider": "prowlarr",
+    "timeout": 30,
+    "providers": {
+      "prowlarr": {"api_url": "http://127.0.0.1:9696", "api_key": "", "name": "Prowlarr"},
+      "jackett": {"api_url": "http://127.0.0.1:9117", "api_key": "", "indexers": "all", "name": "Jackett"},
+      "torznab": {"api_url": "", "api_key": "", "name": "Custom Torznab"}
+    }
+  },
+  "torrent_client": {
+    "enabled": false,
+    "type": "qbittorrent",
+    "url": "http://localhost:8080",
+    "username": "",
+    "password": ""
+  },
+  "vpn": {
+    "enabled": false,
+    "provider": "generic",
+    "providers": {
+      "generic": {"connect_command": "", "disconnect_command": "", "status_command": "", "connected_keywords": ["connected"]}
+    }
+  }
+}

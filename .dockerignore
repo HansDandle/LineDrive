@@ -1,0 +1,8 @@
+.git
+__pycache__
+*.pyc
+config.json
+data/
+*.bat
+*.ps1
+LineDrive Logo.jpg
