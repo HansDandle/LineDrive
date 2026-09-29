@@ -1,4 +1,5 @@
 from bs4 import BeautifulSoup
+import re
 import requests
 from datetime import datetime, timedelta
 import pytz
@@ -10,6 +11,21 @@ GRACENOTE_HEADERS = {
     'Accept': 'application/json',
     'Referer': 'https://tvlistings.gracenote.com/',
 }
+
+def parse_postal_code(code):
+    """('USA', '10001') for a US ZIP, ('CAN', 'M5V3L9') for a Canadian postal code (Gracenote
+    wants it without the space), or None for anything else"""
+    code = re.sub(r'\s+', '', str(code or '')).upper()
+    if re.fullmatch(r'\d{5}', code):
+        return 'USA', code
+    if re.fullmatch(r'[A-Z]\d[A-Z]\d[A-Z]\d', code):
+        return 'CAN', code
+    return None
+
+def ota_lineup_id(code):
+    """Gracenote's over-the-air lineup for a postal code, e.g. USA-OTA10001-DEFAULT"""
+    country, code = parse_postal_code(code)
+    return f"{country}-OTA{code}-DEFAULT"
 
 def _local_tz():
     """Timezone for guide times: epg.timezone if set, else None, which means this machine's
@@ -23,7 +39,7 @@ def _local_tz():
         print(f"Unknown epg.timezone '{name}'; using this machine's time zone")
         return None
 
-def detect_headend_id(zip_code):
+def detect_headend_id(zip_code, country='USA'):
     """Detect headend ID for a given zip code by querying Gracenote"""
     try:
         # First, try to get lineup information for this zip code
@@ -31,7 +47,7 @@ def detect_headend_id(zip_code):
         headers = GRACENOTE_HEADERS
         
         params = {
-            'country': 'USA',
+            'country': country,
             'postalCode': zip_code
         }
         
@@ -68,11 +84,16 @@ def fetch_gracenote_epg(days=7, zip_code=None, headend_id=None):
             zip_code = epg_config['zip_code']
         if headend_id is None:
             headend_id = epg_config['headend_id']
+        parsed = parse_postal_code(zip_code)
+        if not parsed:
+            print(f"Gracenote: '{zip_code}' isn't a US ZIP or Canadian postal code")
+            return []
+        country, zip_code = parsed
             
         # Auto-detect headend ID if not provided
         if not headend_id:
             print(f"Auto-detecting headend ID for zip code {zip_code}...")
-            headend_id = detect_headend_id(zip_code)
+            headend_id = detect_headend_id(zip_code, country)
             if headend_id:
                 # Save the detected headend ID to config for future use
                 config.set('epg', 'headend_id', headend_id)
@@ -81,8 +102,8 @@ def fetch_gracenote_epg(days=7, zip_code=None, headend_id=None):
         
         # Gracenote only accepts real lineup IDs (e.g. USA-OTA10001-DEFAULT); older setups
         # stored made-up "NY10001:X" values, so fall back to the over-the-air lineup
-        if not (headend_id or '').startswith('USA-'):
-            headend_id = f"USA-OTA{zip_code}-DEFAULT"
+        if not (headend_id or '').startswith(f'{country}-'):
+            headend_id = ota_lineup_id(zip_code)
 
         print(f"Fetching EPG data for zip code {zip_code}, lineup ID: {headend_id}")
         
@@ -129,7 +150,7 @@ def fetch_gracenote_epg(days=7, zip_code=None, headend_id=None):
                 'lineupId': headend_id,
                 'timespan': '6',  # 6 hours coverage per fetch
                 'headendId': 'lineupId',
-                'country': 'USA',
+                'country': country,
                 'timezone': '',  # Leave empty for auto-detection
                 'device': '-',
                 'postalCode': zip_code,

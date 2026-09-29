@@ -485,7 +485,7 @@ import socket
 import struct
 import re
 from datetime import datetime, timedelta
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 from epg_zap2it import fetch_zap2it_epg
 # --- Global config variables ---
 HDHR_IP = config.get_hdhr_ip()
@@ -561,10 +561,21 @@ def get_epg():
     with _EPG_LOCK:
         return _get_epg_locked()
 
+def hidden_channels():
+    """Channels the user hid (config guide.hidden_channels, e.g. ["4.3", "58.1"]): left out of the
+    guide, answers and searches, but still recordable by channel number"""
+    return {str(n) for n in (config.get('guide', 'hidden_channels', []) or [])}
+
+def visible_epg():
+    """The guide without hidden channels"""
+    hidden = hidden_channels()
+    epg = get_epg() or []
+    return [p for p in epg if str(p.get('channel_number')) not in hidden] if hidden else epg
+
 SD_GUIDE_TTL = 4 * 3600  # SiliconDust's free guide only reaches a day or so ahead, so refresh it more often
 
 def _get_epg_locked():
-    """Gracenote (with a ZIP code: a week of US listings) merged with SiliconDust's guide for the
+    """Gracenote (with a ZIP or Canadian postal code: a week of listings) merged with SiliconDust's guide for the
     tuner (about a day ahead: series IDs, original air dates, artwork, and the whole guide outside
     the US). See epg_hdhomerun."""
     now = time.time()
@@ -628,7 +639,7 @@ def search_cached_epg(query, days=7):
     print(f"Searching cached EPG for: '{query}'")
     
     # Use cached EPG data
-    epg_data = get_epg()
+    epg_data = visible_epg()
     if not epg_data:
         print("No cached EPG data available")
         return []
@@ -1659,7 +1670,7 @@ def agent_browse_simple(parsed):
     print(f"Browsing EPG for shows matching: '{query}'")
     
     # Use cached EPG data instead of fetching fresh data
-    epg_data = get_epg()
+    epg_data = visible_epg()
     if not epg_data:
         return {"error": "No EPG data available. Try refreshing EPG data."}
     
@@ -1973,7 +1984,7 @@ def agent_record(parsed):
             except Exception:
                 target_time_obj = None
         # Pull fresh/full EPG (cached helper)
-        epg_data = get_epg()
+        epg_data = visible_epg()
         if not epg_data:
             return None
         now = datetime.now()
@@ -2612,7 +2623,7 @@ def is_duplicate_recording(new_recording):
 def schedule_next_episode(show_name):
     """Find the next upcoming airing of a show from EPG and schedule only that single episode."""
     try:
-        epg = get_epg()
+        epg = visible_epg()
         if not epg:
             return {"error": "EPG unavailable"}
         # Flatten all channel listings
@@ -3619,7 +3630,9 @@ _COMMAND_PREFIXES = ('record', 'download', 'organize', 'move ', 'connect', 'disc
 
 def _ask_guide(command, strict):
     from ask_engine import answer as ask_answer
-    result = ask_answer(command, get_epg() or [], channels, coverage=_guide_coverage, strict=strict,
+    hidden = hidden_channels()
+    shown = {num: name for num, name in channels.items() if num not in hidden}
+    result = ask_answer(command, visible_epg(), shown, coverage=_guide_coverage, strict=strict,
                         distant=distant_channels())
     for p in (result or {}).get('programs', []):
         p['recording_now'] = p['airing'] and recording_now(
@@ -3825,7 +3838,7 @@ def sync_guide_series():
         return 0
     now = datetime.now()
     distant = distant_channels()
-    epg = get_epg() or []
+    epg = visible_epg()
     for rule in rules:
         episodes = {}
         for p in epg:
@@ -3873,7 +3886,7 @@ def check_watchlist():
     if not watches:
         return
     now = datetime.now()
-    epg = [p for p in (get_epg() or []) if _program_start(p) and _program_start(p) > now
+    epg = [p for p in visible_epg() if _program_start(p) and _program_start(p) > now
            and (not channels or str(p.get('channel_number')) in channels)]
     titles = {normalize(p['title']).strip(" .!?:'-"): p['title'] for p in epg if p.get('title')}
     for watch in watches:
@@ -4043,9 +4056,12 @@ def _guide_channels(epg):
     for p in epg:
         by_num.setdefault(str(p.get('channel_number')), {}).setdefault(p.get('call_sign', ''), []).append(p)
     lineup = channels or {num: next(iter(calls)) for num, calls in by_num.items()}
+    hidden = hidden_channels()
     norm = lambda s: re.sub(r'[^A-Z0-9]', '', (s or '').upper())
     result = []
     for num, name in lineup.items():
+        if str(num) in hidden:
+            continue
         calls = by_num.get(str(num), {})
         call = None
         if calls:
@@ -4129,6 +4145,15 @@ def api_guide():
         'fetched_at': EPG_CACHE.get('timestamp') or None,
         'channels': out_channels,
     })
+
+@app.route('/guide.xml')
+@app.route('/xmltv.xml')
+def guide_xmltv():
+    """The guide as XMLTV, for Jellyfin/Plex/Channels (hidden channels left out)"""
+    from xmltv_export import build_xmltv
+    from epg_zap2it import _local_tz
+    body = build_xmltv(_guide_channels(visible_epg()), tz=_local_tz(), is_new=is_new_listing)
+    return Response(body, mimetype='application/xml')
 
 def _find_guide_program(channel_number, date, time_str):
     for p in get_epg() or []:
@@ -4274,6 +4299,25 @@ def record_series(channel_number, title, weekdays=None, slot_time=None, new_only
                                      and str(j.get('channel_number')) == channel_number and j.get('title') == title)]
         save_schedule()
     return created
+
+@app.route('/api/guide/hide', methods=['POST'])
+def api_guide_hide():
+    """Hide channels from the guide, or show them again. Body: {channels: ["4.3", ...], hidden: true}"""
+    data = request.get_json() or {}
+    nums = [str(n).strip() for n in data.get('channels') or [] if str(n).strip()]
+    if not nums:
+        return jsonify({'error': 'No channels given'}), 400
+    hidden = hidden_channels()
+    if data.get('hidden', True):
+        hidden.update(nums)
+    else:
+        hidden.difference_update(nums)
+    config.config.setdefault('guide', {})['hidden_channels'] = sorted(hidden, key=_chan_sort)
+    config.save_config()
+    what = nums[0] if len(nums) == 1 else f"{len(nums)} channels"
+    return jsonify({'message': (f"Hid {what}. Show it again in Settings." if data.get('hidden', True)
+                                else f"{what} {'is' if len(nums) == 1 else 'are'} back in the guide"),
+                    'hidden': sorted(hidden, key=_chan_sort)})
 
 @app.route('/api/guide/cancel', methods=['POST'])
 def api_guide_cancel():
@@ -4469,6 +4513,7 @@ def setup_page():
         'timezone': config.get('epg', 'timezone', '') or '',
         'recordings': config.get('directories', 'recordings', '') or '',
         'distant_channels': config.get('guide', 'distant_channels', []) or [],
+        'hidden_channels': config.get('guide', 'hidden_channels', []) or [],
         'jellyfin': c.get('jellyfin') or {}, 'jellyseerr': c.get('jellyseerr') or {}, 'mqtt': c.get('mqtt') or {},
         'quality': config.get('recording', 'quality', 'standard') or 'standard',
     }
@@ -4512,14 +4557,15 @@ def api_setup_test():
     kind = data.get('kind')
     try:
         if kind == 'zip':
-            zip_code = str(data.get('zip_code', '')).strip()
-            if not re.fullmatch(r'\d{5}', zip_code):
-                return jsonify({'ok': False, 'message': 'Enter a 5-digit US ZIP code'})
-            params = {'lineupId': f'USA-OTA{zip_code}-DEFAULT', 'headendId': 'lineupId', 'device': '-',
-                      'timespan': '1', 'country': 'USA', 'postalCode': zip_code, 'isOverride': 'true',
+            from epg_zap2it import GRACENOTE_HEADERS, parse_postal_code, ota_lineup_id
+            zip_code = str(data.get('zip_code', '')).strip().upper()
+            parsed = parse_postal_code(zip_code)
+            if not parsed:
+                return jsonify({'ok': False, 'message': 'Enter a 5-digit US ZIP code or a Canadian postal code'})
+            params = {'lineupId': ota_lineup_id(zip_code), 'headendId': 'lineupId', 'device': '-',
+                      'timespan': '1', 'country': parsed[0], 'postalCode': parsed[1], 'isOverride': 'true',
                       'time': str(int(__import__('time').time())), 'pref': '16,128', 'userId': '-',
                       'aid': 'orbebb', 'languagecode': 'en-us', 'timezone': ''}
-            from epg_zap2it import GRACENOTE_HEADERS
             r = requests.get('https://tvlistings.gracenote.com/api/grid', params=params, timeout=15,
                              headers=GRACENOTE_HEADERS)
             n = len(r.json().get('channels', [])) if r.ok else 0
@@ -4555,16 +4601,31 @@ def api_setup_test():
         return jsonify({'ok': False, 'message': f"Couldn't connect: {e}"})
     return jsonify({'ok': False, 'message': 'Unknown test'}), 400
 
+@app.route('/api/setup/stations', methods=['POST'])
+def api_setup_stations():
+    """Save the Stations box as it's ticked (no restart needed). Body: {distant_channels, hidden_channels}"""
+    data = request.get_json() or {}
+    guide = config.config.setdefault('guide', {})
+    if 'distant_channels' in data:
+        guide['distant_channels'] = [str(m) for m in data['distant_channels'] or [] if str(m).isdigit()]
+    if 'hidden_channels' in data:
+        guide['hidden_channels'] = sorted({str(n).strip() for n in data['hidden_channels'] or [] if str(n).strip()},
+                                          key=_chan_sort)
+    config.save_config()
+    return jsonify({'message': 'Saved', 'distant_channels': guide.get('distant_channels', []),
+                    'hidden_channels': guide.get('hidden_channels', [])})
+
 @app.route('/api/setup/save', methods=['POST'])
 def api_setup_save():
     """Save settings to config.json and restart LineDrive to apply them"""
     data = request.get_json() or {}
     ip = str(data.get('hdhr_ip', '')).strip()
-    zip_code = str(data.get('zip_code', '')).strip()
+    zip_code = str(data.get('zip_code', '')).strip().upper()
     if not ip:
         return jsonify({'error': 'Enter your HDHomeRun address'}), 400
-    if zip_code and not re.fullmatch(r'\d{5}', zip_code):
-        return jsonify({'error': 'Enter a 5-digit ZIP code, or leave it empty outside the US'}), 400
+    from epg_zap2it import parse_postal_code
+    if zip_code and not parse_postal_code(zip_code):
+        return jsonify({'error': 'Enter a 5-digit US ZIP code or a Canadian postal code, or leave it empty elsewhere'}), 400
     c = config.config
     old_zip = config.get('epg', 'zip_code', '')
     c.setdefault('hdhr', {})['ip_address'] = ip
@@ -4583,6 +4644,8 @@ def api_setup_save():
     if data.get('quality') in QUALITY_PROFILES:
         c.setdefault('recording', {})['quality'] = data['quality']
     c.setdefault('guide', {})['distant_channels'] = [str(m) for m in data.get('distant_channels', []) if str(m).isdigit()]
+    if 'hidden_channels' in data:
+        c['guide']['hidden_channels'] = [str(n) for n in data['hidden_channels'] if str(n).strip()]
     for section, keys in (('jellyfin', ('url', 'api_key', 'recordings_path')), ('jellyseerr', ('url', 'api_key')),
                           ('mqtt', ('host', 'port', 'username', 'password'))):
         values = data.get(section) or {}
@@ -4691,7 +4754,7 @@ def debug_nfl_matchup():
         days = int(request.args.get('days','7'))
     except Exception:
         days = 7
-    epg = get_epg()
+    epg = visible_epg()
     if not epg:
         return jsonify({'error': 'EPG unavailable'}), 503
     import datetime as _dt

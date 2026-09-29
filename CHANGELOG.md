@@ -5,6 +5,13 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Canadian postal codes: a week of Gracenote over-the-air listings in Canada (e.g. `M5V 3L9`). Border areas get stations from both sides, as US ZIPs near the border already did.
+- Hide stations: Settings → Stations has a **Hide** box beside **Out of market** for each station (saved as you tick), and **Hide channel** in a show's details hides a single channel. Hidden channels leave the guide, answers, searches and new-episode series but can still be recorded by number. After **Check signal**, Settings offers to hide the weak ones.
+- XMLTV export at `/guide.xml`: the merged guide (Gracenote + SiliconDust, without hidden channels) for Jellyfin, Plex, Channels or anything else that reads XMLTV.
+
 ## [3.1.0] - 2026-09-27
 
 ### Added

@@ -91,19 +91,84 @@
     } catch (e) {
       result.textContent = e.message;
       result.className = 'field-note bad';
-      $('distantBox').hidden = true;
+      $('stationBox').hidden = true;
     }
     markSelected();
   }
 
-  function showMajors(majors) {
-    const list = $('distantList');
-    const chosen = new Set((initial.distant_channels || []).map(String));
-    list.replaceChildren(...majors.map((m) => el('label', { class: 'check' },
-      el('input', { type: 'checkbox', value: m.major, checked: chosen.has(String(m.major)) }),
-      el('span', {}, el('strong', { text: m.major + '.x ' }), el('span', { class: 'muted small', text: m.channels.slice(0, 3).join(', ') + (m.channels.length > 3 ? '…' : '') })))));
-    $('distantBox').hidden = majors.length < 2;
+  // ---- Stations: out of market / hidden --------------------------------------------
+  // One row per station (major number). Out of market: prefer local stations for the same show.
+  // Hide: leave all its channels out of the guide. A station with only some channels hidden
+  // (hidden from the guide one at a time) shows a half-ticked box and keeps that selection.
+
+  let stations = [];
+  let signals = {};
+
+  function stationState() {
+    const rows = Array.from(document.querySelectorAll('#stationList .station:not(.head)'));
+    if (!rows.length) {
+      return { distant: new Set((initial.distant_channels || []).map(String)),
+               hidden: new Set((initial.hidden_channels || []).map(String)) };
+    }
+    const distant = new Set(), hidden = new Set();
+    rows.forEach((r) => {
+      if (r._distant.checked) distant.add(r._major);
+      (r._hide.checked ? r._nums : r._hide.indeterminate ? r._partial : []).forEach((n) => hidden.add(n));
+    });
+    return { distant, hidden };
   }
+
+  function stationNote(nums) {
+    const s = nums.map((n) => signals[n]).filter(Boolean);
+    return !s.length ? '' : s.every((x) => !x.locked) ? 'no signal' : s.some((x) => x.locked && x.weak) ? 'weak' : '';
+  }
+
+  function showMajors(majors) {
+    const { distant, hidden } = stationState();
+    if (majors) stations = majors;
+    const head = el('div', { class: 'station head' }, el('span'), el('span', { text: 'Out of market' }), el('span', { text: 'Hide' }));
+    $('stationList').replaceChildren(head, ...stations.map((m) => {
+      const nums = m.channels.map((c) => c.split(' ')[0]);
+      const partial = nums.filter((n) => hidden.has(n));
+      const note = stationNote(nums);
+      const distantBox = el('input', { type: 'checkbox', checked: distant.has(String(m.major)),
+        'aria-label': m.major + '.x out of market' });
+      const hideBox = el('input', { type: 'checkbox', checked: partial.length === nums.length,
+        'aria-label': 'Hide ' + m.major + '.x' });
+      hideBox.indeterminate = partial.length > 0 && partial.length < nums.length;
+      if (hideBox.indeterminate) hideBox.title = 'Hidden: ' + partial.join(', ');
+      const row = el('div', { class: 'station' + (hideBox.checked ? ' hidden-station' : '') },
+        el('span', { class: 'station-name' }, el('strong', { text: m.major + '.x ' }),
+          el('span', { class: 'muted small', text: m.channels.slice(0, 3).join(', ') + (m.channels.length > 3 ? '…' : '') }),
+          note && el('span', { class: 'sig-note small', text: ' · ' + note })),
+        el('label', {}, distantBox), el('label', {}, hideBox));
+      hideBox.addEventListener('change', () => { row.classList.toggle('hidden-station', hideBox.checked); saveStations(); });
+      distantBox.addEventListener('change', saveStations);
+      Object.assign(row, { _major: String(m.major), _nums: nums, _partial: partial, _distant: distantBox, _hide: hideBox });
+      return row;
+    }));
+    $('stationBox').hidden = !stations.length;
+  }
+
+  // Each tick is saved straight away (these don't need a restart)
+  async function saveStations() {
+    const { distant, hidden } = stationState();
+    try {
+      await postJSON('/api/setup/stations', { distant_channels: Array.from(distant), hidden_channels: Array.from(hidden) });
+      toast('Saved');
+    } catch (err) {
+      toast('Couldn’t save: ' + err.message, true);
+    }
+  }
+
+  async function loadSignals() {
+    try {
+      signals = (await getJSON('/api/signal')).channels || {};
+      if (stations.length) showMajors();
+    } catch (e) { /* no readings yet */ }
+  }
+
+  loadSignals();
 
   $('checkTuner').addEventListener('click', checkTuner);
   ipInput.addEventListener('change', checkTuner);
@@ -132,6 +197,20 @@
           (none.length ? 'No signal: ' + none.join(', ') + '.' : '') +
           (!weak.length && !none.length ? 'All good.' : '');
         result.className = 'field-note ' + (weak.length || none.length ? 'warn' : 'ok');
+        signals = channels;
+        showMajors();
+        const poor = Array.from(document.querySelectorAll('#stationList .station:not(.head)'))
+          .filter((r) => !r._hide.checked && r._nums.some((n) => weak.includes(n) || none.includes(n)));
+        if (poor.length) {
+          const tick = el('button', { type: 'button', class: 'btn', text: 'Tick Hide on these ' + poor.length + ' stations' });
+          tick.addEventListener('click', () => {
+            poor.forEach((r) => { r._hide.checked = true; r._hide.indeterminate = false; r.classList.add('hidden-station'); });
+            tick.remove();
+            $('stationBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
+            saveStations();
+          });
+          result.append(' ', tick);
+        }
         break;
       }
     } catch (e) {
@@ -160,7 +239,9 @@
     return {
       hdhr_ip: v('hdhrIp'), zip_code: v('zipCode'), timezone: tzSelect.value, recordings: v('recordings'),
       quality: v('quality'),
-      distant_channels: Array.from(document.querySelectorAll('#distantList input:checked')).map((c) => c.value),
+      // Only once the tuner's stations are listed, so a tuner that didn't answer doesn't clear them
+      distant_channels: stations.length ? Array.from(stationState().distant) : undefined,
+      hidden_channels: stations.length ? Array.from(stationState().hidden) : undefined,
       jellyfin: { url: v('jfUrl'), api_key: v('jfKey'), recordings_path: v('jfPath') },
       jellyseerr: { url: v('jsUrl'), api_key: v('jsKey') },
       mqtt: { host: v('mqHost'), port: v('mqPort'), username: v('mqUser'), password: v('mqPass') },

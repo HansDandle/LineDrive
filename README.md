@@ -17,7 +17,7 @@ plain-English questions ("when's the next basketball game?"), and recordings you
 
 ## What it does
 
-- **Program guide.** A week of over-the-air listings for your ZIP code, laid out channel by time, with a now-line, search, and a details panel for each show. Works on phones and has a **TV mode for Fire TV / Silk** (D-pad navigation, rewind/fast-forward to page through time).
+- **Program guide.** A week of over-the-air listings for your US ZIP or Canadian postal code, laid out channel by time, with a now-line, search, and a details panel for each show. Works on phones and has a **TV mode for Fire TV / Silk** (D-pad navigation, rewind/fast-forward to page through time).
 - **Record anything, three ways.** Tap a show in the guide, type a channel and length, or just ask.
 - **Ask LineDrive.** Questions and commands in plain English, answered from the guide, offline, no AI service:
   - "when's the next basketball game?" · "what's on NBC at 9?" · "is Jeopardy on tomorrow?" · "movies this weekend"
@@ -63,7 +63,7 @@ services:
 docker compose up -d
 ```
 
-Open `http://<your-server>:5050`. The first visit takes you to **Settings**: pick your HDHomeRun (it's found automatically on most networks), enter your ZIP code, and you're done.
+Open `http://<your-server>:5050`. The first visit takes you to **Settings**: pick your HDHomeRun (it's found automatically on most networks), enter your ZIP or postal code, and you're done.
 
 Images are built for **amd64 and arm64** (Raspberry Pi 4/5, most NASes).
 
@@ -84,7 +84,9 @@ Then open `http://localhost:5050` and follow the setup page.
 
 ## How it works
 
-**The guide** comes from two free sources. Gracenote's over-the-air listings for your ZIP code (the same data behind TV-listing sites) cover a week. SiliconDust's own guide for your tuner, the one the HDHomeRun app uses, covers about a day ahead and adds series IDs, original air dates (better rerun detection), artwork, and channels Gracenote doesn't list. **Outside the US**, leave the ZIP code empty and the guide comes from SiliconDust alone. Channels your antenna doesn't get aren't shown; if it picks up a neighboring city, mark those stations "out of market" in Settings and LineDrive prefers local ones.
+**The guide** comes from two free sources. Gracenote's over-the-air listings for your US ZIP or Canadian postal code (the same data behind TV-listing sites) cover a week; near the border they include stations from both countries. SiliconDust's own guide for your tuner, the one the HDHomeRun app uses, covers about a day ahead and adds series IDs, original air dates (better rerun detection), artwork, and channels Gracenote doesn't list. **Outside the US and Canada**, leave the ZIP code empty and the guide comes from SiliconDust alone. Channels your antenna doesn't get aren't shown; if it picks up a neighboring city, mark those stations "out of market" in Settings and LineDrive prefers local ones. Channels you don't want (too weak, shopping, duplicates) can be hidden: tick **Hide** next to the station in **Settings → Stations** (or **Hide channel** in any show's details). After **Check signal**, Settings offers to hide the weak ones.
+
+**XMLTV.** The guide is also served as XMLTV at `http://<your-server>:5050/guide.xml`, so Jellyfin, Plex, Channels and other apps can use the same merged listings. Channel ids are the tuner's channel numbers (`4.1`).
 
 **Recording** pulls the tuner's HTTP stream and encodes it to H.264 MP4 with FFmpeg (CPU encode). **Settings → Recording quality** trades size for quality: Best, Standard (about 2.5 GB an hour of full-HD TV), Smaller, 720p (about 0.9 GB an hour and much lighter on the CPU, a good pick for a Raspberry Pi or several recordings at once), or Original (the untouched broadcast as `.ts`). Each recording is named from the listing on air when it starts, and it's a fragmented MP4, so a recording cut off by a crash or power cut still plays up to that point.
 
@@ -112,11 +114,11 @@ Everything is on the **Settings** page (gear icon). It writes `config.json` in t
 | Setting | Notes |
 |---|---|
 | HDHomeRun | Found automatically, or type its IP. |
-| ZIP code | US: a week of Gracenote listings. Leave empty elsewhere (SiliconDust's guide, about a day ahead). |
+| ZIP or postal code | US ZIP or Canadian postal code: a week of Gracenote listings. Leave empty elsewhere (SiliconDust's guide, about a day ahead). |
 | Recording quality | Best / Standard / Smaller / 720p / Original. |
 | Time zone | Leave on "this computer's". In Docker, set `TZ`. |
 | Recordings folder | `/recordings` in Docker. |
-| Out-of-market stations | Stations from another city your antenna also receives. |
+| Stations | Tick **Out of market** for another city's stations your antenna also receives, **Hide** to leave a station out of the guide. Saved as you tick. |
 | Jellyfin | URL + API key (Dashboard → API Keys). Set *Recordings folder as Jellyfin sees it* to the path the recordings are mounted at inside Jellyfin. |
 | Jellyseerr | URL + API key (Settings → General). |
 | Home Assistant | Your MQTT broker. The LineDrive device appears on its own. |
@@ -143,7 +145,7 @@ With MQTT set up, LineDrive shows up as a device:
 ## Troubleshooting
 
 - **"All tuners are in use."** Another app (Jellyfin/Plex live TV, the HDHomeRun app, Channels) has them. The status card shows what's on each tuner; **Free up** releases one another app left open. In Jellyfin, setting the tuner's simultaneous-stream limit to 1 keeps a tuner free for LineDrive.
-- **Guide is empty.** Check the ZIP code with **Test** in Settings. Outside the US, leave it empty.
+- **Guide is empty.** Check the ZIP or postal code with **Test** in Settings. Outside the US and Canada, leave it empty.
 - **Times are off by an hour or more.** In Docker, set `TZ`. Otherwise leave Time zone on "this computer's".
 - **Can't reach `http://<this PC's IP>:5050` from the same Windows PC** (other devices work): that's Docker Desktop with WSL "mirrored" networking. Use `http://localhost:5050` on that PC, or add `hostAddressLoopback=true` under `[experimental]` in `%UserProfile%\.wslconfig`.
 - **Recordings have blocky glitches.** That's reception: the damage is in the broadcast LineDrive received. The guide's signal bars show which channels are weak; **Check now** in a show's details re-measures one.

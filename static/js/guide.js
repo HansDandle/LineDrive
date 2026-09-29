@@ -320,7 +320,21 @@
         check.textContent = 'Check now';
       }
     });
-    box.append(check);
+    const hide = el('button', 'link', 'Hide channel');
+    hide.type = 'button';
+    hide.title = 'Leave ' + ch.number + ' out of the guide and answers. Show it again in Settings.';
+    hide.addEventListener('click', async () => {
+      if (!confirm('Hide ' + ch.number + ' ' + ch.name + ' from the guide? You can show it again in Settings.')) return;
+      try {
+        const res = await post('/api/guide/hide', { channels: [ch.number], hidden: true });
+        toast(res.message);
+        closePanel();
+        await load(state.day, { keepScroll: true, silent: true });
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+    box.append(check, hide);
   }
 
   function ago(iso) {

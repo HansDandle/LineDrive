@@ -8,7 +8,7 @@
     "headend_id": "",
     "timezone": "",
     "refresh_interval": 24,
-    "comment": "zip_code picks your over-the-air guide. Leave headend_id empty (it becomes USA-OTA<zip>-DEFAULT). Leave timezone empty to use this machine's (in Docker, the TZ variable). refresh_interval is in hours."
+    "comment": "zip_code picks your over-the-air guide: a US ZIP or a Canadian postal code. Leave headend_id empty (it becomes USA-OTA<zip>-DEFAULT or CAN-OTA<postal code>-DEFAULT). Leave timezone empty to use this machine's (in Docker, the TZ variable). refresh_interval is in hours."
   },
   "directories": {
     "recordings": "~/TV_Recordings",
