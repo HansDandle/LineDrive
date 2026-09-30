@@ -5,7 +5,7 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.3.0] - 2026-09-29
 
 ### Added
 - More than one ZIP/postal code, comma-separated (`L2E 6S4, 14201`), for antennas that reach a market Gracenote lists separately. Each lineup is fetched and merged; where two carry the same station, the first code wins.
