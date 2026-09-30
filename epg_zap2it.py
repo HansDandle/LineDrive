@@ -22,6 +22,11 @@ def parse_postal_code(code):
         return 'CAN', code
     return None
 
+def split_postal_codes(value):
+    """epg.zip_code can hold several codes ("L2E 6S4, 14201") for antennas that reach another
+    market Gracenote lists separately"""
+    return [c.strip() for c in re.split(r'[,;]', str(value or '')) if c.strip()]
+
 def ota_lineup_id(code):
     """Gracenote's over-the-air lineup for a postal code, e.g. USA-OTA10001-DEFAULT"""
     country, code = parse_postal_code(code)
@@ -81,7 +86,7 @@ def fetch_gracenote_epg(days=7, zip_code=None, headend_id=None):
         
         # Use provided parameters or fall back to configuration
         if zip_code is None:
-            zip_code = epg_config['zip_code']
+            zip_code = (split_postal_codes(epg_config['zip_code']) or [''])[0]
         if headend_id is None:
             headend_id = epg_config['headend_id']
         parsed = parse_postal_code(zip_code)
@@ -193,7 +198,7 @@ def search_epg_for_show(show_name, days=7):
     print(f"Searching EPG for show: '{show_name}' over next {days} days...")
     
     # Get all EPG data for the specified number of days
-    all_epg_data = fetch_gracenote_epg(days)
+    all_epg_data = fetch_zap2it_epg(days)
     
     # Search for matching shows with improved logic
     matching_episodes = []
@@ -686,7 +691,34 @@ def parse_gracenote_data(data, target_date):
 #     """Fallback EPG data disabled - using only real Gracenote API data"""
 #     return []
 
-# Legacy function for backward compatibility
-def fetch_zap2it_epg():
-    """Legacy function - redirects to Gracenote"""
-    return fetch_gracenote_epg()
+def lineup_stations(code):
+    """[(channel number, call sign)] in a code's over-the-air lineup right now (an hour of the grid)"""
+    import time
+    country, postal = parse_postal_code(code)
+    params = {'lineupId': ota_lineup_id(code), 'headendId': 'lineupId', 'device': '-', 'timespan': '1',
+              'country': country, 'postalCode': postal, 'isOverride': 'true', 'time': str(int(time.time())),
+              'pref': '16,128', 'userId': '-', 'aid': 'orbebb', 'languagecode': 'en-us', 'timezone': ''}
+    r = requests.get('https://tvlistings.gracenote.com/api/grid', params=params, timeout=15, headers=GRACENOTE_HEADERS)
+    if not r.ok:
+        return []
+    return [(str(c.get('channelNo', '')), c.get('callSign', '')) for c in r.json().get('channels', [])]
+
+def merge_lineups(lineups):
+    """Listings from several codes' lineups, each station once: where two lineups carry the same
+    station (channel number + call sign), the earlier code's listings are kept"""
+    merged, seen = [], set()
+    for progs in lineups:
+        stations = {(str(p.get('channel_number')), p.get('call_sign')) for p in progs}
+        fresh = stations - seen
+        merged.extend(p for p in progs if (str(p.get('channel_number')), p.get('call_sign')) in fresh)
+        seen |= stations
+    return merged
+
+def fetch_zap2it_epg(days=7):
+    """Gracenote listings for every configured ZIP/postal code, merged (the first code wins)"""
+    codes = [c for c in split_postal_codes(get_config().get_epg_config()['zip_code']) if parse_postal_code(c)]
+    lineups = []
+    for i, code in enumerate(codes):
+        # Only the first code uses (and may save) epg.headend_id; the rest use their over-the-air lineup
+        lineups.append(fetch_gracenote_epg(days, zip_code=code, headend_id=None if i == 0 else ota_lineup_id(code)))
+    return merge_lineups(lineups)

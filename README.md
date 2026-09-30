@@ -84,7 +84,7 @@ Then open `http://localhost:5050` and follow the setup page.
 
 ## How it works
 
-**The guide** comes from two free sources. Gracenote's over-the-air listings for your US ZIP or Canadian postal code (the same data behind TV-listing sites) cover a week; near the border they include stations from both countries. SiliconDust's own guide for your tuner, the one the HDHomeRun app uses, covers about a day ahead and adds series IDs, original air dates (better rerun detection), artwork, and channels Gracenote doesn't list. **Outside the US and Canada**, leave the ZIP code empty and the guide comes from SiliconDust alone. Channels your antenna doesn't get aren't shown; if it picks up a neighboring city, mark those stations "out of market" in Settings and LineDrive prefers local ones. Channels you don't want (too weak, shopping, duplicates) can be hidden: tick **Hide** next to the station in **Settings → Stations** (or **Hide channel** in any show's details). After **Check signal**, Settings offers to hide the weak ones.
+**The guide** comes from two free sources. Gracenote's over-the-air listings for your US ZIP or Canadian postal code (the same data behind TV-listing sites) cover a week; near the border they include stations from both countries. If your antenna reaches a city your lineup doesn't include, enter that city's code as well (`L2E 6S4, 14201`); **Test** in Settings lists any of your channels that still have no listings. SiliconDust's own guide for your tuner, the one the HDHomeRun app uses, covers about a day ahead and adds series IDs, original air dates (better rerun detection), artwork, and channels Gracenote doesn't list. **Outside the US and Canada**, leave the ZIP code empty and the guide comes from SiliconDust alone. Channels your antenna doesn't get aren't shown; if it picks up a neighboring city, mark those stations "out of market" in Settings and LineDrive prefers local ones. Channels you don't want (too weak, shopping, duplicates) can be hidden: tick **Hide** next to the station in **Settings → Stations**, or open the station (▸) to hide single subchannels like 7.2 while keeping 7.1 (or use **Hide channel** in any show's details). After **Check signal**, Settings offers to hide the weak ones.
 
 **XMLTV.** The guide is also served as XMLTV at `http://<your-server>:5050/guide.xml`, so Jellyfin, Plex, Channels and other apps can use the same merged listings. Channel ids are the tuner's channel numbers (`4.1`).
 
@@ -114,7 +114,7 @@ Everything is on the **Settings** page (gear icon). It writes `config.json` in t
 | Setting | Notes |
 |---|---|
 | HDHomeRun | Found automatically, or type its IP. |
-| ZIP or postal code | US ZIP or Canadian postal code: a week of Gracenote listings. Leave empty elsewhere (SiliconDust's guide, about a day ahead). |
+| ZIP or postal code | US ZIP or Canadian postal code: a week of Gracenote listings. Several, comma-separated, for an antenna that reaches another market. Leave empty elsewhere (SiliconDust's guide, about a day ahead). |
 | Recording quality | Best / Standard / Smaller / 720p / Original. |
 | Time zone | Leave on "this computer's". In Docker, set `TZ`. |
 | Recordings folder | `/recordings` in Docker. |

@@ -98,14 +98,17 @@
 
   // ---- Stations: out of market / hidden --------------------------------------------
   // One row per station (major number). Out of market: prefer local stations for the same show.
-  // Hide: leave all its channels out of the guide. A station with only some channels hidden
-  // (hidden from the guide one at a time) shows a half-ticked box and keeps that selection.
+  // Hide: leave its channels out of the guide. A station with several channels expands (▸) so
+  // single subchannels can be hidden; its own box is then half-ticked.
 
   let stations = [];
   let signals = {};
+  const openStations = new Set();
+
+  const stationRows = () => Array.from(document.querySelectorAll('#stationList .major'));
 
   function stationState() {
-    const rows = Array.from(document.querySelectorAll('#stationList .station:not(.head)'));
+    const rows = stationRows();
     if (!rows.length) {
       return { distant: new Set((initial.distant_channels || []).map(String)),
                hidden: new Set((initial.hidden_channels || []).map(String)) };
@@ -113,40 +116,73 @@
     const distant = new Set(), hidden = new Set();
     rows.forEach((r) => {
       if (r._distant.checked) distant.add(r._major);
-      (r._hide.checked ? r._nums : r._hide.indeterminate ? r._partial : []).forEach((n) => hidden.add(n));
+      r._subs.forEach((s) => { if (s.box.checked) hidden.add(s.num); });
     });
     return { distant, hidden };
   }
 
-  function stationNote(nums) {
+  function signalNote(nums) {
     const s = nums.map((n) => signals[n]).filter(Boolean);
     return !s.length ? '' : s.every((x) => !x.locked) ? 'no signal' : s.some((x) => x.locked && x.weak) ? 'weak' : '';
+  }
+
+  function stationRow(m, distant, hidden) {
+    const major = String(m.major);
+    const subs = m.channels.map((c) => {
+      const num = c.split(' ')[0];
+      const box = el('input', { type: 'checkbox', checked: hidden.has(num), 'aria-label': 'Hide ' + num });
+      const note = signalNote([num]);
+      const row = el('div', { class: 'station sub' + (box.checked ? ' hidden-station' : '') },
+        el('span', { class: 'station-name' }, el('strong', { text: num + ' ' }), c.slice(num.length).trim(),
+          note && el('span', { class: 'sig-note small', text: ' · ' + note })),
+        el('span'), el('label', {}, box));
+      return { num, box, row };
+    });
+    const distantBox = el('input', { type: 'checkbox', checked: distant.has(major), 'aria-label': major + '.x out of market' });
+    const hideBox = el('input', { type: 'checkbox', 'aria-label': 'Hide all of ' + major + '.x' });
+    const multi = subs.length > 1;
+    const toggle = multi ? el('button', { type: 'button', class: 'expand', 'aria-label': 'Show ' + major + '.x channels' }) : null;
+    const note = signalNote(subs.map((s) => s.num));
+    const row = el('div', { class: 'station major' },
+      el('span', { class: 'station-name' }, toggle || el('span', { class: 'expand-space' }),
+        el('strong', { text: major + '.x ' }),
+        el('span', { class: 'muted small', text: m.channels.slice(0, 3).join(', ') + (m.channels.length > 3 ? '…' : '') }),
+        note && el('span', { class: 'sig-note small', text: ' · ' + note })),
+      el('label', {}, distantBox), el('label', {}, hideBox));
+    const list = el('div', { class: 'subs' }, subs.map((s) => s.row));
+
+    function sync() {
+      const n = subs.filter((s) => s.box.checked).length;
+      hideBox.checked = n === subs.length;
+      hideBox.indeterminate = n > 0 && n < subs.length;
+      row.classList.toggle('hidden-station', hideBox.checked);
+      subs.forEach((s) => s.row.classList.toggle('hidden-station', s.box.checked));
+    }
+    function setOpen(open) {
+      list.hidden = !open;
+      if (toggle) {
+        toggle.textContent = open ? '▾' : '▸';
+        toggle.setAttribute('aria-expanded', String(open));
+      }
+      if (open) openStations.add(major); else openStations.delete(major);
+    }
+    row._setHidden = (on) => { subs.forEach((s) => { s.box.checked = on; }); sync(); };
+    hideBox.addEventListener('change', () => { row._setHidden(hideBox.checked); saveStations(); });
+    subs.forEach((s) => s.box.addEventListener('change', () => { sync(); saveStations(); }));
+    distantBox.addEventListener('change', saveStations);
+    if (toggle) toggle.addEventListener('click', () => setOpen(list.hidden));
+    sync();
+    // Open when only some of its channels are hidden, so that's visible
+    setOpen(multi && (openStations.has(major) || hideBox.indeterminate));
+    Object.assign(row, { _major: major, _nums: subs.map((s) => s.num), _subs: subs, _distant: distantBox, _hide: hideBox });
+    return [row, list];
   }
 
   function showMajors(majors) {
     const { distant, hidden } = stationState();
     if (majors) stations = majors;
     const head = el('div', { class: 'station head' }, el('span'), el('span', { text: 'Out of market' }), el('span', { text: 'Hide' }));
-    $('stationList').replaceChildren(head, ...stations.map((m) => {
-      const nums = m.channels.map((c) => c.split(' ')[0]);
-      const partial = nums.filter((n) => hidden.has(n));
-      const note = stationNote(nums);
-      const distantBox = el('input', { type: 'checkbox', checked: distant.has(String(m.major)),
-        'aria-label': m.major + '.x out of market' });
-      const hideBox = el('input', { type: 'checkbox', checked: partial.length === nums.length,
-        'aria-label': 'Hide ' + m.major + '.x' });
-      hideBox.indeterminate = partial.length > 0 && partial.length < nums.length;
-      if (hideBox.indeterminate) hideBox.title = 'Hidden: ' + partial.join(', ');
-      const row = el('div', { class: 'station' + (hideBox.checked ? ' hidden-station' : '') },
-        el('span', { class: 'station-name' }, el('strong', { text: m.major + '.x ' }),
-          el('span', { class: 'muted small', text: m.channels.slice(0, 3).join(', ') + (m.channels.length > 3 ? '…' : '') }),
-          note && el('span', { class: 'sig-note small', text: ' · ' + note })),
-        el('label', {}, distantBox), el('label', {}, hideBox));
-      hideBox.addEventListener('change', () => { row.classList.toggle('hidden-station', hideBox.checked); saveStations(); });
-      distantBox.addEventListener('change', saveStations);
-      Object.assign(row, { _major: String(m.major), _nums: nums, _partial: partial, _distant: distantBox, _hide: hideBox });
-      return row;
-    }));
+    $('stationList').replaceChildren(head, ...stations.flatMap((m) => stationRow(m, distant, hidden)));
     $('stationBox').hidden = !stations.length;
   }
 
@@ -199,12 +235,12 @@
         result.className = 'field-note ' + (weak.length || none.length ? 'warn' : 'ok');
         signals = channels;
         showMajors();
-        const poor = Array.from(document.querySelectorAll('#stationList .station:not(.head)'))
+        const poor = stationRows()
           .filter((r) => !r._hide.checked && r._nums.some((n) => weak.includes(n) || none.includes(n)));
         if (poor.length) {
           const tick = el('button', { type: 'button', class: 'btn', text: 'Tick Hide on these ' + poor.length + ' stations' });
           tick.addEventListener('click', () => {
-            poor.forEach((r) => { r._hide.checked = true; r._hide.indeterminate = false; r.classList.add('hidden-station'); });
+            poor.forEach((r) => r._setHidden(true));
             tick.remove();
             $('stationBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
             saveStations();

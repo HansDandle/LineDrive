@@ -5,6 +5,13 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- More than one ZIP/postal code, comma-separated (`L2E 6S4, 14201`), for antennas that reach a market Gracenote lists separately. Each lineup is fetched and merged; where two carry the same station, the first code wins.
+- **Test** next to the ZIP/postal code reports each code's channel count and lists any of your tuner's channels that none of them cover.
+- Hide single subchannels: in Settings → Stations, open a station (▸) and hide e.g. 7.2 while 7.1 stays in the guide. The station's box is half-ticked when only some of its channels are hidden.
+
 ## [3.2.0] - 2026-09-29
 
 ### Added

@@ -575,7 +575,7 @@ def visible_epg():
 SD_GUIDE_TTL = 4 * 3600  # SiliconDust's free guide only reaches a day or so ahead, so refresh it more often
 
 def _get_epg_locked():
-    """Gracenote (with a ZIP or Canadian postal code: a week of listings) merged with SiliconDust's guide for the
+    """Gracenote (with ZIP or Canadian postal codes: a week of listings) merged with SiliconDust's guide for the
     tuner (about a day ahead: series IDs, original air dates, artwork, and the whole guide outside
     the US). See epg_hdhomerun."""
     now = time.time()
@@ -4550,6 +4550,35 @@ def api_setup_lineup():
     return jsonify({'device': device, 'channels': len(lineup),
                     'majors': [{'major': m, 'channels': v} for m, v in sorted(majors.items(), key=lambda kv: int(kv[0]) if kv[0].isdigit() else 999)]})
 
+def _test_postal_codes(value):
+    """Settings' Test for the ZIP/postal code field: each code's lineup size, and which of the
+    tuner's channels none of them list"""
+    from epg_zap2it import split_postal_codes, parse_postal_code, lineup_stations
+    codes = [c.upper() for c in split_postal_codes(value)]
+    bad = [c for c in codes if not parse_postal_code(c)]
+    if not codes or bad:
+        return {'ok': False, 'message': (f"“{bad[0]}” isn't a " if bad else 'Enter a ') +
+                '5-digit US ZIP code or a Canadian postal code' + ('' if bad else ' (separate several with commas)')}
+    covered, parts = set(), []
+    for code in codes:
+        nums = {num for num, _ in lineup_stations(code)}
+        extra = f", {len(nums - covered)} not in the codes before it" if parts and nums else ''
+        parts.append(f"{code}: {len(nums)} channels{extra}" if nums else f"{code}: no over-the-air guide")
+        covered |= nums
+    if not covered:
+        return {'ok': False, 'message': f"No over-the-air guide for {', '.join(codes)}"}
+    message = 'Guide found. ' + '; '.join(parts) + '.'
+    hidden = hidden_channels()
+    mine = [n for n in sorted(channels, key=_chan_sort) if n not in hidden]
+    missing = [f"{n} {channels[n]}".strip() for n in mine if n not in covered]
+    if mine and not missing:
+        message += f" Covers all {len(mine)} of your tuner's channels."
+    elif missing:
+        message += (f" No listings for {len(missing)} of your tuner's channels: {', '.join(missing[:8])}"
+                    f"{f' and {len(missing) - 8} more' if len(missing) > 8 else ''}. A ZIP or postal code near those stations may cover them"
+                    " (SiliconDust's guide still gives them about a day).")
+    return {'ok': True, 'message': message}
+
 @app.route('/api/setup/test', methods=['POST'])
 def api_setup_test():
     """Try one setting before saving. Body: {kind: zip|jellyfin|jellyseerr|mqtt, ...values}"""
@@ -4557,20 +4586,7 @@ def api_setup_test():
     kind = data.get('kind')
     try:
         if kind == 'zip':
-            from epg_zap2it import GRACENOTE_HEADERS, parse_postal_code, ota_lineup_id
-            zip_code = str(data.get('zip_code', '')).strip().upper()
-            parsed = parse_postal_code(zip_code)
-            if not parsed:
-                return jsonify({'ok': False, 'message': 'Enter a 5-digit US ZIP code or a Canadian postal code'})
-            params = {'lineupId': ota_lineup_id(zip_code), 'headendId': 'lineupId', 'device': '-',
-                      'timespan': '1', 'country': parsed[0], 'postalCode': parsed[1], 'isOverride': 'true',
-                      'time': str(int(__import__('time').time())), 'pref': '16,128', 'userId': '-',
-                      'aid': 'orbebb', 'languagecode': 'en-us', 'timezone': ''}
-            r = requests.get('https://tvlistings.gracenote.com/api/grid', params=params, timeout=15,
-                             headers=GRACENOTE_HEADERS)
-            n = len(r.json().get('channels', [])) if r.ok else 0
-            return jsonify({'ok': n > 0, 'message': f"Guide found: {n} over-the-air channels for {zip_code}" if n
-                            else f"No over-the-air guide for {zip_code}"})
+            return jsonify(_test_postal_codes(str(data.get('zip_code', ''))))
         if kind == 'jellyfin':
             r = requests.get(data['url'].rstrip('/') + '/System/Info', headers={'X-Emby-Token': data.get('api_key', '')}, timeout=10)
             return jsonify({'ok': r.ok, 'message': f"Connected to {r.json().get('ServerName')} (Jellyfin {r.json().get('Version')})"
@@ -4623,9 +4639,13 @@ def api_setup_save():
     zip_code = str(data.get('zip_code', '')).strip().upper()
     if not ip:
         return jsonify({'error': 'Enter your HDHomeRun address'}), 400
-    from epg_zap2it import parse_postal_code
-    if zip_code and not parse_postal_code(zip_code):
-        return jsonify({'error': 'Enter a 5-digit US ZIP code or a Canadian postal code, or leave it empty elsewhere'}), 400
+    from epg_zap2it import parse_postal_code, split_postal_codes
+    codes = split_postal_codes(zip_code)
+    bad = [c for c in codes if not parse_postal_code(c)]
+    if bad:
+        return jsonify({'error': f"“{bad[0]}” isn't a 5-digit US ZIP code or a Canadian postal code. "
+                                 'Separate several with commas, or leave it empty outside the US and Canada.'}), 400
+    zip_code = ', '.join(codes)
     c = config.config
     old_zip = config.get('epg', 'zip_code', '')
     c.setdefault('hdhr', {})['ip_address'] = ip
@@ -4699,10 +4719,9 @@ def refresh_epg_manual():
         days = int(request.args.get('days','7'))
     except Exception:
         days = 7
-    from epg_zap2it import fetch_gracenote_epg
     try:
         print(f"EPG: manual refresh requested (days={days})")
-        fresh = fetch_gracenote_epg(days=days)
+        fresh = fetch_zap2it_epg(days=days)
         EPG_CACHE['data'] = fresh
         EPG_CACHE['timestamp'] = time.time()
         return jsonify({'status':'ok','program_count': len(fresh)})

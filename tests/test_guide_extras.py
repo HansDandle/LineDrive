@@ -76,3 +76,31 @@ def test_station_ticks_save_right_away(dvr, guide, no_hidden, monkeypatch):
     assert dvr.config.get("guide", "distant_channels") == ["4"]
     assert dvr.hidden_channels() == {"7.1", "7.2"}
     dvr.config.config["guide"]["distant_channels"] = []
+
+
+def test_several_postal_codes():
+    from epg_zap2it import merge_lineups, split_postal_codes
+    assert split_postal_codes("L2E 6S4, 14201;") == ["L2E 6S4", "14201"]
+    assert split_postal_codes("") == []
+    local = [{"channel_number": "2.1", "call_sign": "WGRZ", "title": "Local"},
+             {"channel_number": "5.1", "call_sign": "CBLT", "title": "News"}]
+    distant = [{"channel_number": "2.1", "call_sign": "WGRZ", "title": "Dup"},
+               {"channel_number": "8.1", "call_sign": "WROC", "title": "Far"}]
+    assert [p["title"] for p in merge_lineups([local, distant])] == ["Local", "News", "Far"]
+
+
+def test_postal_code_test_reports_missing_channels(dvr, guide, no_hidden, monkeypatch):
+    import epg_zap2it
+    load_guide(dvr, guide)
+    nums = sorted(guide["lineup"], key=dvr._chan_sort)
+    lineups = {"L2E6S4": [(n, "X") for n in nums[:3]], "14201": [(n, "X") for n in nums[2:-1]]}
+    monkeypatch.setattr(epg_zap2it, "lineup_stations", lambda code: lineups[code.replace(" ", "")])
+    msg = dvr._test_postal_codes("L2E 6S4, 14201")["message"]
+    assert "L2E 6S4: 3 channels" in msg and f"14201: {len(nums) - 3} channels, {len(nums) - 4} not in the codes before it" in msg
+    assert f"No listings for 1 of your tuner's channels: {nums[-1]}" in msg
+    assert "isn't a" in dvr._test_postal_codes("14201, SW1A 1AA")["message"]
+
+
+def test_settings_save_checks_every_code(dvr):
+    r = dvr.app.test_client().post("/api/setup/save", json={"hdhr_ip": "10.0.0.2", "zip_code": "14201, nope"})
+    assert r.status_code == 400 and "NOPE" in r.get_json()["error"]

@@ -47,7 +47,7 @@
                 </div>
                 <fieldset id="stationBox" class="field" hidden>
                     <legend>Stations <span class="muted">(optional)</span></legend>
-                    <p class="field-note"><strong>Out of market:</strong> another city's station your antenna also picks up. When a local station carries the same show, LineDrive prefers the local one. <strong>Hide:</strong> leave it out of the guide, answers and series (you can still record it by channel number). "Weak" and "no signal" are from the last signal check. Ticks are saved as you make them.</p>
+                    <p class="field-note"><strong>Out of market:</strong> another city's station your antenna also picks up. When a local station carries the same show, LineDrive prefers the local one. <strong>Hide:</strong> leave it out of the guide, answers and series (you can still record it by channel number). Open a station with ▸ to hide just some of its channels. "Weak" and "no signal" are from the last signal check. Ticks are saved as you make them.</p>
                     <div id="stationList" class="stations"></div>
                 </fieldset>
                 {% if not first_run %}
@@ -67,10 +67,10 @@
                 <div class="field">
                     <label for="zipCode">ZIP or postal code <span class="muted">(US, Canada)</span></label>
                     <div class="inline">
-                        <input type="text" id="zipCode" value="{{ settings.zip_code }}" maxlength="7" autocapitalize="characters" placeholder="10001 or M5V 3L9" />
+                        <input type="text" id="zipCode" value="{{ settings.zip_code }}" maxlength="80" autocapitalize="characters" placeholder="10001 or M5V 3L9" />
                         <button type="button" class="btn test-btn" data-kind="zip">Test</button>
                     </div>
-                    <p class="field-note" data-result="zip">With a US ZIP or Canadian postal code you get a week of Gracenote's over-the-air listings, including stations from across the border if your area gets them. The guide also uses SiliconDust's listings for your tuner, which add artwork and better rerun detection. Elsewhere, leave this empty: SiliconDust's guide on its own covers about a day ahead.</p>
+                    <p class="field-note" data-result="zip">With a US ZIP or Canadian postal code you get a week of Gracenote's over-the-air listings, including stations from across the border if your area gets them. If your antenna reaches a city that isn't in your lineup, add that city's code too, separated by a comma (e.g. <code>L2E 6S4, 14201</code>); Test shows which of your channels still have no listings. The guide also uses SiliconDust's listings for your tuner, which add artwork and better rerun detection. Elsewhere, leave this empty: SiliconDust's guide on its own covers about a day ahead.</p>
                 </div>
                 <div class="field">
                     <label for="timezone">Time zone</label>
