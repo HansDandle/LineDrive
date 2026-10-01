@@ -502,6 +502,19 @@
     actions: document.getElementById('pActions'),
   };
 
+  // Hands the tuner's own stream to VLC: phones and tablets open it through VLC's vlc:// link,
+  // computers get a one-channel playlist file to open with VLC. Nothing is converted.
+  async function watchInVlc(ch) {
+    const res = await fetch('/api/watch/' + encodeURIComponent(ch.number));
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Couldn’t start the stream');
+    const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);  // iPadOS
+    window.location.href = mobile ? 'vlc://' + data.url : data.playlist;
+    toast(mobile ? 'Opening VLC…' : 'Open the downloaded playlist with VLC');
+    return false;
+  }
+
   function actionButton(label, sub, cls, handler) {
     const b = el('button', cls || '');
     b.type = 'button';
@@ -564,6 +577,9 @@
     if (p.end <= now) {
       actions.append(el('p', 'p-meta', 'This has already aired.'));
     } else {
+      if (airing) {
+        actions.append(actionButton('Watch in VLC', 'Live from the tuner, on this device', '', () => watchInVlc(ch)));
+      }
       if (airing && !p.recording_now) {
         actions.append(actionButton('Record the rest', 'Starts now · ' + minutesLeft + ' min left', 'primary',
           () => post('/api/guide/record', Object.assign({ mode: 'episode' }, body))));

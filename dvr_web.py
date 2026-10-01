@@ -221,7 +221,8 @@ def resume_interrupted_recordings(now_dt=None):
         print(f"[Scheduler] Resuming '{job.get('title')}' on {ch_num} for the last {minutes} min ({what} it)")
         started_at_iso = now_dt.isoformat()
         run_threaded(record_channel, ch_num, minutes, int(job.get('crf') or 23), job.get('preset') or 'fast',
-                     job.get('format') or 'mp4', started_at=started_at_iso, title=job.get('title'), program_time=slot)
+                     job.get('format') or 'mp4', started_at=started_at_iso, title=job.get('title'), program_time=slot,
+                     rule_id=rule_of(job))
         job['last_started_at'] = started_at_iso
         if job.get('type') != 'recurring_series':
             job['status'] = 'recording'
@@ -249,7 +250,7 @@ def resume_interrupted_recordings(now_dt=None):
         minutes = int((end - now_dt).total_seconds() // 60) + 1
         print(f"[Scheduler] Resuming '{rec.get('title') or ch_num}' on {ch_num} for the last {minutes} min")
         run_threaded(record_channel, ch_num, minutes, int(crf), preset, fmt, started_at=now_dt.isoformat(),
-                     title=rec.get('title') or None, program_time=program_time)
+                     title=rec.get('title') or None, program_time=program_time, rule_id=rec.get('rule'))
         NOTICES.append({'message': f"LineDrive restarted during {rec.get('title') or 'a recording on ' + ch_num}, "
                                    f"so it's recording the rest as a second file.", 'at': now_dt.isoformat()})
     # One-time recordings a restart cut off after their end time: they're over, not "recording"
@@ -339,7 +340,7 @@ def run_schedule_loop():
                         print(f"[Scheduler] Warning: {busy}")
                     started_at_iso = now_dt.isoformat()
                     run_threaded(record_channel, ch_num, dur_min, crf, preset, fmt, started_at=started_at_iso,
-                                 title=job.get('title'), program_time=slot)
+                                 title=job.get('title'), program_time=slot, rule_id=rule_of(job))
                     job['last_started_at'] = started_at_iso
                     if job.get('type') != 'recurring_series':
                         job['status'] = 'recording'
@@ -513,6 +514,7 @@ stop_event = threading.Event()
 
 app = Flask(__name__)
 from version import __version__
+import cleanup
 
 @app.context_processor
 def _template_globals():
@@ -1193,6 +1195,14 @@ def recorded_episodes():
                     index.add((show, 'se', int(s.group(1)), int(e.group(1))))
                 if t and '<episodedetails>' in xml:
                     index.add((show, 'title', _norm_title(t.group(1))))
+    # Recordings a keep/delete rule removed still count, so a rerun doesn't bring them back
+    for e in _load_ledger():
+        if e.get('status') == 'deleted':
+            show = _norm_title(e.get('title'))
+            if str(e.get('season')).isdigit() and str(e.get('episode')).isdigit():
+                index.add((show, 'se', int(e['season']), int(e['episode'])))
+            if e.get('episode_title'):
+                index.add((show, 'title', _norm_title(e['episode_title'])))
     _LIBRARY_CACHE.update(at=_t.time(), index=index)
     return index
 
@@ -1401,9 +1411,10 @@ def notify_jellyfin(host_path):
         print(f"[Jellyfin] Couldn't notify: {e}")
 
 def record_channel(channel_key, duration_min, crf=23, preset="fast", record_format="mp4", started_at=None, title=None,
-                   program_time=None):
+                   program_time=None, rule_id=None):
     """program_time: when the show being recorded started, for naming a recording that starts
-    late (e.g. resumed after a restart, when the guide may already show the next program)"""
+    late (e.g. resumed after a restart, when the guide may already show the next program).
+    rule_id: the series rule recording it, whose keep/delete setting then applies to the file."""
     global current_process, stop_event
     chname = channels[channel_key]
     # Use a filesystem-friendly timestamp for the output filename and keep an ISO timestamp for job tracking
@@ -1433,6 +1444,7 @@ def record_channel(channel_key, duration_min, crf=23, preset="fast", record_form
         'path': filepath,
         'program_time': (program_time or started).isoformat(),
         'settings': [crf, preset, record_format],
+        'rule': rule_id,
     }
     _save_active()
     mqtt_poke()
@@ -1462,9 +1474,165 @@ def record_channel(channel_key, duration_min, crf=23, preset="fast", record_form
             pass
     finally:
         ACTIVE_RECORDINGS.pop(filename, None)
+        if os.path.exists(filepath):
+            ledger_add(filepath, rule_id, prog, started)
         if not RESTARTING:
             _save_active()
+            if rule_id is not None:
+                run_threaded(_cleanup_safely)
         mqtt_poke()
+
+# ---- Recordings ledger and keep/delete rules -------------------------------------------------
+# Every file LineDrive records is listed here with the series rule that made it. Clean-up only
+# ever removes files on this list, so downloads and your own files in the same folders are safe.
+LEDGER_FILE = os.path.join(DATA_DIR, 'recordings.json')
+LEDGER_LOCK = threading.Lock()
+CLEANUP_INTERVAL = timedelta(hours=1)
+
+def _load_ledger():
+    try:
+        with open(LEDGER_FILE, encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
+
+def _save_ledger(entries):
+    try:
+        tmp = LEDGER_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(entries, f, indent=1)
+        os.replace(tmp, LEDGER_FILE)
+    except OSError as e:
+        print(f"[Cleanup] Couldn't save {LEDGER_FILE}: {e}")
+
+def ledger_add(path, rule_id, prog, started):
+    """Note a finished recording (path relative to the recordings folder, so moving that folder is fine)"""
+    prog = prog or {}
+    entry = {'file': os.path.relpath(path, SAVE_DIR), 'rule': rule_id, 'title': prog.get('title') or '',
+             'season': str(prog.get('season_number') or ''), 'episode': str(prog.get('episode_number') or ''),
+             'episode_title': prog.get('episode_title') or '', 'started_at': started.isoformat(),
+             'finished_at': datetime.now().isoformat(), 'status': 'kept'}
+    with LEDGER_LOCK:
+        entries = [e for e in _load_ledger() if e.get('file') != entry['file']]
+        entries.append(entry)
+        _save_ledger(entries)
+
+def rule_of(job):
+    """The series rule a schedule entry records for (its own id for a time-slot series), or None"""
+    if job.get('series_rule') is not None:
+        return job['series_rule']
+    return job.get('id') if job.get('type') == 'recurring_series' else None
+
+def _from_utc(text):
+    """Jellyfin's '2026-10-01T03:04:05.1234567Z' as a local naive datetime"""
+    from datetime import timezone
+    main = text.rstrip('Z').split('.')[0]
+    return datetime.fromisoformat(main).replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+
+def jellyfin_played():
+    """{normcased recording path: when it was watched} for recordings any Jellyfin user has watched.
+    Empty when Jellyfin isn't set up or can't be reached."""
+    jf = config.get('jellyfin', default={}) or {}
+    if not (jf.get('url') and jf.get('api_key')):
+        return {}
+    base = jf['url'].rstrip('/')
+    headers = {'X-Emby-Token': jf['api_key']}
+    root = jf.get('recordings_path', '/recordings').rstrip('/') + '/'
+    out = {}
+    try:
+        for user in requests.get(base + '/Users', headers=headers, timeout=10).json():
+            items = requests.get(f"{base}/Users/{user['Id']}/Items", headers=headers, timeout=30,
+                                 params={'Recursive': 'true', 'IsPlayed': 'true', 'Fields': 'Path',
+                                         'IncludeItemTypes': 'Episode,Movie,Video'}).json().get('Items', [])
+            for item in items:
+                path = item.get('Path') or ''
+                if not path.startswith(root):
+                    continue
+                host = os.path.normcase(os.path.join(SAVE_DIR, *path[len(root):].split('/')))
+                last = (item.get('UserData') or {}).get('LastPlayedDate')
+                when = _from_utc(last) if last else datetime.now()  # marked watched without playing
+                out[host] = min(out.get(host, when), when)
+    except Exception as e:
+        print(f"[Cleanup] Couldn't ask Jellyfin what's been watched: {e}")
+    return out
+
+def run_cleanup(now=None):
+    """Apply each series rule's keep setting to the recordings it made, then purge the recycle
+    folder. Returns [(rule, ledger entry)] for each recording removed."""
+    now = now or datetime.now()
+    rules = {j.get('id'): j for j in list(scheduled_jobs)
+             if isinstance(j, dict) and j.get('type') in ('recurring_series', 'guide_series')}
+    policies = {rid: cleanup.parse_keep(cleanup.keep_setting(rule)) for rid, rule in rules.items()}
+    policies = {rid: p for rid, p in policies.items() if p}
+    removed = []
+    if policies:
+        with LEDGER_LOCK:
+            entries = _load_ledger()
+            recording = {os.path.normcase(r.get('path') or '') for r in list(ACTIVE_RECORDINGS.values())}
+            live = []
+            for e in entries:
+                if e.get('status') != 'kept' or e.get('rule') not in policies:
+                    continue
+                path = os.path.join(SAVE_DIR, e['file'])
+                if not os.path.exists(path):
+                    e['status'] = 'gone'  # deleted by hand, or moved elsewhere
+                elif os.path.normcase(path) not in recording:
+                    live.append(e)
+            if any(kind == 'watched' for kind, _ in policies.values()):
+                played = jellyfin_played()
+                for e in live:
+                    when = played.get(os.path.normcase(os.path.join(SAVE_DIR, e['file'])))
+                    if when and not e.get('played_at'):
+                        e['played_at'] = when.isoformat()
+            for rid, policy in policies.items():
+                mine = [dict(e, finished_at=datetime.fromisoformat(e['finished_at']),
+                             played_at=datetime.fromisoformat(e['played_at']) if e.get('played_at') else None)
+                        for e in live if e.get('rule') == rid]
+                doomed = {v['file'] for v in cleanup.to_remove(mine, policy, now)}
+                for e in live:
+                    if e['file'] not in doomed:
+                        continue
+                    try:
+                        cleanup.recycle(os.path.join(SAVE_DIR, e['file']), SAVE_DIR)
+                    except OSError as err:
+                        print(f"[Cleanup] Couldn't remove {e['file']}: {err}")
+                        continue
+                    e['status'] = 'deleted'
+                    e['deleted_at'] = now.isoformat()
+                    removed.append((rules[rid], e))
+            _save_ledger(entries)
+    purged = cleanup.purge_recycled(SAVE_DIR)
+    if purged:
+        print(f"[Cleanup] Emptied {purged} file(s) older than {cleanup.RECYCLE_DAYS} days from {cleanup.RECYCLE_DIR}")
+    if removed:
+        _LIBRARY_CACHE['at'] = 0
+        by_rule = {}
+        for rule, e in removed:
+            by_rule.setdefault(rule.get('id'), (rule, []))[1].append(e)
+        for rule, gone in by_rule.values():
+            label = cleanup.keep_label(cleanup.keep_setting(rule)).lower()
+            one = len(gone) == 1
+            print(f"[Cleanup] {rule.get('title')}: removed {', '.join(e['file'] for e in gone)} ({label})")
+            NOTICES.append({'message': f"Cleaned up {'1 recording' if one else f'{len(gone)} recordings'} of "
+                                       f"{rule.get('title')} ({label}). {'It stays' if one else 'They stay'} in the "
+                                       f"{cleanup.RECYCLE_DIR} folder for {cleanup.RECYCLE_DAYS} days if you want "
+                                       f"{'it' if one else 'them'} back.", 'at': now.isoformat()})
+            del NOTICES[:-5]
+            notify_jellyfin(os.path.join(SAVE_DIR, gone[0]['file']))
+    return removed
+
+def _cleanup_safely():
+    try:
+        run_cleanup()
+    except Exception as e:
+        import traceback
+        print(f"[Cleanup] Failed: {e}\n{traceback.format_exc()}")
+
+def run_cleanup_loop():
+    time.sleep(120)  # let startup and any resumed recordings settle first
+    while True:
+        _cleanup_safely()
+        time.sleep(CLEANUP_INTERVAL.total_seconds())
 
 ACTIVE_FILE = os.path.join(DATA_DIR, 'recording_now.json')
 
@@ -4081,15 +4249,30 @@ def check_watchlist():
 @app.route('/api/rules/<int:job_id>', methods=['POST'])
 @warns_of_clashes
 def api_rule_options(job_id):
-    """Change a series rule's options. Body: {new_only: bool}"""
-    job = next((j for j in scheduled_jobs if j.get('id') == job_id and j.get('type') == 'recurring_series'), None)
+    """Change a series rule's options. Body: {new_only: bool} and/or {keep: 'last:5' | 'days:14' |
+    'watched:2' | 'all'}"""
+    job = next((j for j in scheduled_jobs if j.get('id') == job_id
+                and j.get('type') in ('recurring_series', 'guide_series')), None)
     if not job:
         return jsonify({'error': 'Series not found'}), 404
     data = request.get_json() or {}
-    if 'new_only' in data:
+    said = []
+    if 'new_only' in data and job.get('type') == 'recurring_series':
         job['new_only'] = bool(data['new_only'])
+        said.append('new episodes only' if job.get('new_only') else 'records reruns too')
+    if 'keep' in data:
+        keep = str(data['keep'] or 'all')
+        if keep != 'all' and not cleanup.parse_keep(keep):
+            return jsonify({'error': f"Unknown keep setting '{keep}'"}), 400
+        job['keep'] = keep
+        job.pop('retention_weeks', None)
+        said.append(cleanup.keep_label(keep).lower())
+        if keep != 'all':
+            said.append(f"removed recordings stay in the {cleanup.RECYCLE_DIR} folder for {cleanup.RECYCLE_DAYS} days")
     save_schedule()
-    return jsonify({'message': f"{job.get('title')}: " + ('new episodes only' if job.get('new_only') else 'records reruns too')})
+    if 'keep' in data and job['keep'] != 'all':
+        run_threaded(_cleanup_safely)
+    return jsonify({'message': f"{job.get('title')}: " + '; '.join(said or ['no change'])})
 
 def weekdays_lower(days):
     return {d.lower() for d in days}
@@ -4460,6 +4643,26 @@ def record_series(channel_number, title, weekdays=None, slot_time=None, new_only
                                      and str(j.get('channel_number')) == channel_number and j.get('title') == title)]
         save_schedule()
     return created
+
+@app.route('/api/watch/<channel>')
+def api_watch(channel):
+    """For the guide's Watch in VLC button: the tuner's stream for this channel, if a tuner is free"""
+    if channel not in channels:
+        return jsonify({'error': f"No channel {channel} on the tuner"}), 404
+    busy = no_tuner_message()
+    if busy:
+        return jsonify({'error': busy.replace('to record this', 'to watch this')}), 409
+    return jsonify({'url': f"http://{HDHR_IP}:5004/auto/v{channel}", 'playlist': f"/watch/{channel}.m3u"})
+
+@app.route('/watch/<channel>.m3u')
+def watch_playlist(channel):
+    """A one-channel playlist that VLC (or any player) opens straight from the tuner, nothing
+    converted. Closing the player frees the tuner."""
+    if channel not in channels:
+        return jsonify({'error': f"No channel {channel} on the tuner"}), 404
+    body = f"#EXTM3U\n#EXTINF:-1,{channel} {channels[channel]}\nhttp://{HDHR_IP}:5004/auto/v{channel}\n"
+    return Response(body, mimetype='audio/x-mpegurl',
+                    headers={'Content-Disposition': f'attachment; filename="LineDrive {channel}.m3u"'})
 
 @app.route('/api/guide/hide', methods=['POST'])
 def api_guide_hide():
@@ -5083,6 +5286,7 @@ def upcoming_recordings():
                 'duration': int(eps[0].get('duration') or 30) if eps else 0,
                 'airing': bool(nxt and nxt <= now), 'new_only': True, 'skip': False,
                 'clash': clash_info([j.get('id') for j in eps], nxt),
+                'keep': cleanup.keep_setting(job),
             })
             continue
         if job.get('series_rule'):
@@ -5134,6 +5338,7 @@ def upcoming_recordings():
             'duration': duration,
             'airing': nxt <= now,
             'clash': clash_info([job.get('id')], nxt),
+            'keep': cleanup.keep_setting(job) if series else None,
         })
     # Unscheduled entries (watches, series waiting for the guide) go last. No float('inf') here:
     # it serializes as Infinity, which isn't JSON, and browsers reject the whole response.
@@ -5148,6 +5353,8 @@ def recent_recording_files(limit=6):
     for root, dirs, names in os.walk(SAVE_DIR):
         if os.path.relpath(root, SAVE_DIR).count(os.sep) >= 3:
             dirs[:] = []
+        if root == SAVE_DIR and cleanup.RECYCLE_DIR in dirs:
+            dirs.remove(cleanup.RECYCLE_DIR)
         for name in names:
             if name.lower().endswith(('.mp4', '.ts', '.mkv')) and name not in active:
                 try:
@@ -5208,6 +5415,9 @@ def api_status():
         'tuners': tuner_details(),
         'this_pc': _local_ip(),
         'version': __version__,
+        'jellyfin': bool((config.get('jellyfin', default={}) or {}).get('url')
+                         and (config.get('jellyfin', default={}) or {}).get('api_key')),
+        'keep_choices': cleanup.KEEP_CHOICES,
     })
 
 @app.route("/api/status/dismiss_notices", methods=["POST"])
@@ -5631,6 +5841,9 @@ if __name__=="__main__":
         print(f"Background EPG refresh loop: ENABLED (every {EPG_TTL / 3600:.0f} hours)")
     else:
         print("Background EPG refresh loop: DISABLED (unset ENABLE_BACKGROUND_EPG_REFRESH to enable)")
+
+    # Keep/delete rules for series recordings
+    threading.Thread(target=run_cleanup_loop, daemon=True).start()
 
     # Per-channel signal strength for the guide
     if HDHR_IP:

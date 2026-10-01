@@ -180,6 +180,9 @@ button, input, select { font: inherit; color: inherit; }
 .is-skipped .up-time { color: var(--text-3); text-decoration: line-through; }
 .switch { display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 13px; color: var(--text-2); cursor: pointer; }
 .switch input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.up-options { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 4px; }
+.up-options .switch { margin-top: 0; }
+.keep select.keep-select { width: auto; min-height: 30px; padding: 4px 30px 4px 10px; font-size: 13px; color: var(--text-2); border-radius: 8px; }
 .failure p + p { margin-top: 4px; }
 
 /* Ask */

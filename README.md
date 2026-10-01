@@ -105,6 +105,10 @@ Then open `http://localhost:5050` and follow the setup page.
 
 "Already have it" is checked against your recordings folder by season/episode number or episode title, so a wrong "new" flag in the guide won't cost you a tuner.
 
+**Keep or delete.** Each series in **Upcoming** has a menu for what to keep: everything (the default), the newest 1, 3, 5 or 10 episodes, delete after a week, two weeks or 30 days, or, with Jellyfin connected, delete once watched (right away, after 2 days or after a week). LineDrive only ever removes recordings it made for that series: it keeps a list of them, so downloads and your own files in the same folders are never touched. Removed recordings (with their `.srt` and `.nfo`) go to a `.deleted` folder in your recordings for 7 days before they're gone for good; move one back to restore it. An episode a rule removed still counts as one you have, so a rerun doesn't record it again. Cancelling a series keeps everything it recorded.
+
+**Watch live in VLC.** Open anything that's on now in the guide and choose **Watch in VLC**. Phones and tablets open it in the VLC app; on a computer you get a small playlist file to open with VLC. The picture comes straight from the tuner, unconverted, and closing VLC frees the tuner.
+
 **Reliability details:** a recording that follows live sports on the same channel gets 30 extra minutes, because games run long and push everything after them back (`recording.sports_overrun_minutes`); a recording starts even if LineDrive was briefly late (within 5 minutes), two copies of LineDrive can't both run the same schedule, clashing file names get ` (2)` instead of overwriting, and a recording that can't get a tuner shows up on the status card (and in Home Assistant) instead of failing silently.
 
 ## Settings

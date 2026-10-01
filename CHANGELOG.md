@@ -5,6 +5,15 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-10-01
+
+### Added
+- Keep or delete, per series: a menu on each series in Upcoming keeps everything (the default), the newest 1, 3, 5 or 10 episodes, deletes after 1 week, 2 weeks or 30 days, or, with Jellyfin connected, deletes once watched (right away, after 2 days or after a week). Clean-up runs hourly and after each recording.
+  - Only recordings LineDrive made for that series are ever removed. They're listed in `data/recordings.json` from this version on, so downloads, your own files, and recordings from before 3.5 are never touched.
+  - Removed recordings and their `.srt`/`.nfo` go to `<recordings>/.deleted/` for 7 days first (Jellyfin skips it), and the home page says what was cleaned up.
+  - A removed episode still counts as one you have, so a rerun doesn't record it again.
+- **Watch in VLC** in the guide's details for anything on now: phones and tablets open the tuner's stream in the VLC app, computers get a one-channel playlist to open with VLC. Nothing is converted, and closing VLC frees the tuner.
+
 ## [3.4.0] - 2026-10-01
 
 ### Added

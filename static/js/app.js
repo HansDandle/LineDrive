@@ -92,7 +92,7 @@
       $('statusSub').textContent = 'Pick something from the guide to record it.';
     }
 
-    renderUpcoming(s.upcoming || []);
+    renderUpcoming(s.upcoming || [], s);
 
     renderTuners(s.tuners, s.this_pc);
 
@@ -184,8 +184,29 @@
 
   // ---- Upcoming -------------------------------------------------------------
 
-  function renderUpcoming(items) {
+  // Keep/delete setting for a series: a small menu under its title
+  function keepMenu(item, status) {
+    const choices = (status.keep_choices || []).filter(([value]) =>
+      status.jellyfin || !value.startsWith('watched:') || value === item.keep);
+    if (!choices.some(([value]) => value === item.keep)) choices.push([item.keep, item.keep]);
+    const select = el('select', { class: 'keep-select', 'aria-label': 'What to keep of ' + item.title,
+      title: 'Removed recordings go to the .deleted folder in your recordings for 7 days',
+      onchange: async (e) => {
+        try {
+          const data = await postJSON('/api/rules/' + item.id, { keep: e.target.value });
+          toast(data.message);
+          refreshStatus();
+        } catch (err) { toast(err.message, true); e.target.value = item.keep; }
+      } },
+      choices.map(([value, label]) => el('option', { value, text: label, selected: value === item.keep })));
+    return el('label', { class: 'keep' }, select);
+  }
+
+  function renderUpcoming(items, status) {
+    status = status || {};
     const list = $('upcomingList');
+    // The 30-second refresh would close a Keep menu someone has open
+    if (document.activeElement && document.activeElement.tagName === 'SELECT' && list.contains(document.activeElement)) return;
     $('upcomingCount').textContent = items.length;
     $('upcomingEmpty').hidden = items.length > 0;
     list.hidden = items.length === 0;
@@ -224,7 +245,8 @@
           item.episode && el('p', { class: 'up-episode', text: item.episode }),
           item.clash && el('p', { class: 'up-clash small', text: item.clash.message }),
           el('p', { class: 'muted small', text: where }),
-          newOnly),
+          (newOnly || (item.series && item.keep)) && el('div', { class: 'up-options' },
+            newOnly, item.series && item.keep && keepMenu(item, status))),
         cancel);
     }));
   }
