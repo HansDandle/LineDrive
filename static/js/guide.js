@@ -100,7 +100,7 @@
     toastEl.classList.toggle('error', !!isError);
     toastEl.classList.add('show');
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => toastEl.classList.remove('show'), 3500);
+    toast._t = setTimeout(() => toastEl.classList.remove('show'), Math.max(3500, msg.length * 60));
   }
 
   // ---- Data -------------------------------------------------------------
@@ -424,6 +424,7 @@
     b.classList.toggle('airing', p.start <= now && now < p.end);
     b.classList.toggle('rec', !!p.recording);
     b.classList.toggle('series', !!(p.recording && p.recording.kind === 'series'));
+    b.classList.toggle('clash', !!p.clash);
   }
 
   function updateNow() {
@@ -553,6 +554,7 @@
     panelEls.recording.textContent = p.recording_now ? '● Recording now' : !rec ? '' :
       rec.kind === 'series' ? '● Recording as a series' + (rec.description ? ': ' + rec.description : '') :
       '● Scheduled to record';
+    if (p.clash && !p.recording_now) panelEls.recording.textContent += '. ⚠ ' + p.clash;
 
     const actions = panelEls.actions;
     actions.replaceChildren();

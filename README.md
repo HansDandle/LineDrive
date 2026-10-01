@@ -24,8 +24,8 @@ plain-English questions ("when's the next basketball game?"), and recordings you
   - "record the next Longhorns game" · "record SNL every Saturday" · "record Jeopardy, new episodes only"
   - "record Abbott Elementary when it comes back" (it watches the guide and starts recording when the new season shows up)
 - **Series that don't waste tuners.** "New episodes only" follows each first-run episode wherever it airs (preemptions, sister stations), skips reruns, and skips episodes you already have.
-- **Recordings your media server understands.** `TV/<Show>/Season 52/Show - S52E01 - Episode Title.mp4` (or air-date names), `Movies/<Title (Year)>/`, plus a `.nfo` with the plot and air date and a `.srt` of the broadcast's closed captions. Jellyfin, Emby, Kodi and Plex pick them up with proper titles and subtitles.
-- **Tuner-aware.** Refuses to "record" when every tuner is busy (and tells you who has them), reports failed recordings, and has a **kill switch** for streams other apps leave open (hello, Jellyfin live TV).
+- **Recordings your media server understands.** `TV/<Show>/Season 52/Show - S52E01 - Episode Title.mp4` (or air-date names), `Movies/<Title (Year)>/`, plus a `.nfo` with the plot and air date and a `.srt` of the broadcast's closed captions (either can be turned off in Settings). Jellyfin, Emby, Kodi and Plex pick them up with proper titles and subtitles.
+- **Tuner-aware.** Warns when you schedule more recordings at once than you have tuners, and badges the one that won't get a tuner until you sort it out. Refuses to "record" when every tuner is busy (and tells you who has them), reports failed recordings, and has a **kill switch** for streams other apps leave open (hello, Jellyfin live TV).
 - **Integrations (all optional):**
   - **Jellyfin:** new recordings appear seconds after they finish.
   - **Jellyseerr:** "download Dune" or "get season 2 of The Bear" sends a request to Radarr/Sonarr.

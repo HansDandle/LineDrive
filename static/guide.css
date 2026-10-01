@@ -180,6 +180,8 @@ button, input { font: inherit; color: inherit; }
   display: inline-block; width: 8px; height: 8px; margin-right: 6px;
   border-radius: 50%; background: var(--rec); vertical-align: 1px;
 }
+.prog.rec.clash { border-color: rgba(245, 185, 66, 0.7); background: linear-gradient(90deg, rgba(245, 185, 66, 0.16), var(--surface) 70%); }
+.prog.rec.clash .t::before { background: #f5b942; }
 .prog.rec.series .t::before { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--rec); }
 .prog.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .canvas.searching .prog:not(.match) { opacity: 0.18; }

@@ -68,6 +68,7 @@ def save_schedule():
         with open(SCHEDULE_FILE, "w") as f:
             json.dump(serializable, f, indent=2)
         print(f"DEBUG: Save successful!")
+        clashes_changed()
         mqtt_poke()
     except Exception as e:
         print(f"Error saving schedule: {e}")
@@ -476,6 +477,7 @@ def unified_torrent_search(query: str, content_type: str = "tv", sort: str = Non
     except Exception as e:
         print(f"❌ Indexer search failed: {e}")
         return ("error", [])
+import functools
 import threading
 import subprocess
 import time
@@ -510,6 +512,12 @@ current_process = None
 stop_event = threading.Event()
 
 app = Flask(__name__)
+from version import __version__
+
+@app.context_processor
+def _template_globals():
+    return {'version': __version__}
+
 from epg_zap2it import fetch_zap2it_epg
 from epg_hdhomerun import fetch_hdhomerun_guide, parse_hdhomerun_guide, merge_guides
 import time
@@ -731,6 +739,7 @@ def get_hdhr_channels(ip):
 channels = get_hdhr_channels(HDHR_IP)
 days_list = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
+TUNER_COUNT = None  # from the device; remembered so a moment it doesn't answer doesn't hide clashes
 ACTIVE_RECORDINGS = {}  # filename -> info about recordings in progress (for the status display)
 RESTARTING = False  # set while settings are applied by restarting; recordings stopped for it get resumed
 RECORDING_FAILURES = []  # recent recordings that couldn't start or died, newest last (for the status display)
@@ -827,6 +836,7 @@ def tuner_details():
         status = requests.get(f"http://{HDHR_IP}/status.json", timeout=3).json()
     except Exception:
         return None
+    global TUNER_COUNT
     ours = {rec['channel_number'] for rec in ACTIVE_RECORDINGS.values()}
     tuners = []
     for s in status:
@@ -842,6 +852,7 @@ def tuner_details():
             'in_use': in_use,
             'ours': in_use and s.get('VctNumber') in ours,
         })
+    TUNER_COUNT = len(tuners) or TUNER_COUNT
     return tuners
 
 def tuner_usage():
@@ -859,6 +870,134 @@ def no_tuner_message():
         what = "Both tuners are" if len(busy) == 2 else f"All {len(busy)} tuners are" if len(busy) > 1 else "The tuner is"
         return f"{what} in use ({', '.join(busy)}). Stop one of those to record this."
     return None
+
+# ---- Tuner clashes -----------------------------------------------------------------------------
+# Scheduling never refuses a recording (a show may end early, or you'll stop one yourself), but one
+# due to start while every tuner is busy fails. Those airings are flagged ahead of time instead.
+CLASH_HORIZON = timedelta(days=8)
+_CLASH_CACHE = {'at': 0.0, 'data': None, 'changes': 0}
+
+def planned_airings(jobs, now_dt, horizon=CLASH_HORIZON, padding=lambda channel, slot: 0,
+                    skip=lambda job, slot: False):
+    """[(start, end, job)] for each recording the schedule will start after now_dt and within
+    horizon, in the order the scheduler starts them (list order breaks ties, as in find_due_jobs)"""
+    out = []
+    until = now_dt + horizon
+    for order, job in enumerate(jobs):
+        if not isinstance(job, dict):
+            continue
+        hm = parse_job_time(job.get('time') or (job.get('recurrence') or {}).get('time'))
+        if not hm:
+            continue
+        if job.get('type') == 'recurring_series':
+            if job.get('status') != 'active':
+                continue
+            days = rule_days(job)
+            base = now_dt.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+            slots = [base + timedelta(days=d) for d in range(horizon.days + 1)]
+            slots = [s for s in slots if not days or s.strftime('%A') in days]
+        elif job.get('status') == 'scheduled' and job.get('type') != 'one_time_timeslot' \
+                and not job.get('last_started_at'):
+            try:
+                slots = [datetime.strptime(job.get('date', ''), '%Y-%m-%d').replace(hour=hm[0], minute=hm[1])]
+            except ValueError:
+                continue
+        else:
+            continue
+        for slot in slots:
+            if not (now_dt < slot <= until) or skip(job, slot):
+                continue
+            minutes = int(job.get('duration') or 30) + padding(job.get('channel_number'), slot)
+            out.append((slot, slot + timedelta(minutes=minutes), order, job))
+    out.sort(key=lambda a: (a[0], a[2]))
+    return [(start, end, job) for start, end, _, job in out]
+
+def find_clashes(airings, busy_until, tuners):
+    """Hand out tuners the way the recordings will take them: each airing gets one if any is free
+    when it starts, and keeps it to the end. busy_until: [(end, title)] already recording.
+    Returns [(start, end, job, [titles holding every tuner then])] for airings left without one."""
+    held = list(busy_until)
+    out = []
+    for start, end, job in airings:
+        held = [(e, t) for e, t in held if e > start]  # back to back is fine
+        if len(held) >= tuners:
+            out.append((start, end, job, [t for _, t in sorted(held, key=lambda h: h[0])]))
+        else:
+            held.append((end, job.get('title') or 'Recording'))
+    return out
+
+def clashes_changed():
+    _CLASH_CACHE['data'] = None
+    _CLASH_CACHE['changes'] += 1
+
+def schedule_clashes():
+    """{(job_id, start): {'start', 'with'}} for scheduled recordings that won't get a tuner.
+    Cached for a minute; changing the schedule or what's recording clears it."""
+    if _CLASH_CACHE['data'] is not None and time.time() - _CLASH_CACHE['at'] < 60:
+        return _CLASH_CACHE['data']
+    if TUNER_COUNT is None:
+        tuner_details()
+    data = {}
+    if TUNER_COUNT:
+        now = datetime.now()
+        busy = [(datetime.fromisoformat(r['ends_at']),
+                 r.get('title') or f"{r.get('channel_number', '')} {r.get('channel_name', '')}".strip())
+                for r in list(ACTIVE_RECORDINGS.values())]
+        airings = planned_airings(scheduled_jobs, now,
+                                  padding=lambda channel, slot: overrun_padding(channel, slot)[0],
+                                  skip=lambda job, slot: bool(skip_reason(job, slot)[0]))
+        for start, end, job, holders in find_clashes(airings, busy, TUNER_COUNT):
+            data[(job.get('id'), start)] = {'job_id': job.get('id'), 'title': job.get('title') or 'Recording',
+                                            'start': start, 'with': holders}
+    _CLASH_CACHE.update(at=time.time(), data=data)
+    return data
+
+def _and_list(names):
+    names = list(dict.fromkeys(names))
+    return names[0] if len(names) == 1 else ', '.join(names[:-1]) + ' and ' + names[-1]
+
+def clash_warning(clashes):
+    """'Heads up: The Voice (Thu 8:00 PM) won't record: both tuners will be busy with NCIS and Survivor.'"""
+    if not clashes:
+        return ''
+    n = TUNER_COUNT or 0
+    tuners = 'the tuner' if n == 1 else 'both tuners' if n == 2 else f'all {n} tuners'
+    parts = [f"{c['title']} ({_when_label(c['start'])}) won't record: {tuners} will be busy with "
+             f"{_and_list(c['with'])}" for c in sorted(clashes, key=lambda c: c['start'])[:3]]
+    more = f" (and {len(clashes) - 3} more)" if len(clashes) > 3 else ''
+    return 'Heads up: ' + '; '.join(parts) + more + '. Cancel one of them to free a tuner.'
+
+def clash_message(clash):
+    """One clash, for a badge's explanation (None when there's no clash)"""
+    return clash_warning([clash])[len('Heads up: '):] if clash else None
+
+def warns_of_clashes(view):
+    """For routes that change the schedule: when the change leaves a recording without a tuner,
+    add a heads-up to the response's message. The recording is still scheduled."""
+    @functools.wraps(view)
+    def wrapper(*args, **kwargs):
+        try:
+            before = set(schedule_clashes())
+        except Exception:
+            before = None
+        changes = _CLASH_CACHE['changes']
+        resp = app.make_response(view(*args, **kwargs))
+        # Nothing to check when the schedule didn't change (a guide question, say)
+        if before is None or changes == _CLASH_CACHE['changes'] or resp.status_code >= 400 or not resp.is_json:
+            return resp
+        try:
+            new = [c for key, c in schedule_clashes().items() if key not in before]
+            body = resp.get_json()
+            if new and isinstance(body, dict):
+                target = body['result'] if isinstance(body.get('result'), dict) else body
+                warning = clash_warning(new)
+                target['clash_warning'] = warning
+                target['message'] = f"{target['message'].rstrip('. ')}. {warning}" if target.get('message') else warning
+                resp.set_data(json.dumps(body))
+        except Exception as e:
+            print(f"[Schedule] Couldn't check for tuner clashes: {e}")
+        return resp
+    return wrapper
 
 # ---- Signal strength per channel ---------------------------------------------------------------
 # Measured by briefly tuning a free tuner (a scan, or one channel from the guide), and sampled
@@ -1110,9 +1249,7 @@ def overrun_padding(channel_number, slot):
     minutes = int(config.get('recording', 'sports_overrun_minutes', 30) or 0)
     if minutes <= 0:
         return 0, None
-    for p in EPG_CACHE.get('data') or []:
-        if str(p.get('channel_number')) != str(channel_number):
-            continue
+    for p in epg_by_channel().get(str(channel_number), []):
         start = _program_start(p)
         if not start or start >= slot:
             continue
@@ -1141,13 +1278,24 @@ def rerun_listing(job, slot):
         return None
     return None if is_new_listing(prog) else prog
 
+_EPG_INDEX = {'data': None, 'index': {}}
+
+def epg_by_channel():
+    """The cached guide's listings grouped by channel number. Rebuilt whenever the guide is replaced
+    (it always is, never appended to), so per-channel lookups don't scan the whole week."""
+    data = EPG_CACHE.get('data') or []
+    if _EPG_INDEX['data'] is not data:
+        index = {}
+        for p in data:
+            index.setdefault(str(p.get('channel_number')), []).append(p)
+        _EPG_INDEX.update(data=data, index=index)
+    return _EPG_INDEX['index']
+
 def program_on_air(channel_key, when):
     """The guide listing on this channel at `when` (a recording's start), or None. Uses the cached
     guide only, so starting a recording never waits on a guide download."""
     probe = when + timedelta(minutes=1)  # a slot starting at 10:29 means the 10:29 show, not the one ending then
-    for p in EPG_CACHE.get('data') or []:
-        if str(p.get('channel_number')) != str(channel_key):
-            continue
+    for p in epg_by_channel().get(str(channel_key), []):
         start = _program_start(p)
         if start and start <= probe < start + timedelta(minutes=int(p.get('duration') or 30)):
             return p
@@ -1290,7 +1438,8 @@ def record_channel(channel_key, duration_min, crf=23, preset="fast", record_form
     mqtt_poke()
     try:
         _record_to_file(channel_key, duration_min, crf, preset, record_format, started_at, filepath, url)
-        if prog and os.path.exists(filepath):
+        # Config recording.nfo (default on): plot, air date and episode details for Jellyfin/Kodi
+        if prog and os.path.exists(filepath) and config.get('recording', 'nfo', True):
             try:
                 write_nfo(filepath, prog, started)
             except OSError as e:
@@ -1322,6 +1471,7 @@ ACTIVE_FILE = os.path.join(DATA_DIR, 'recording_now.json')
 def _save_active():
     """What's recording, on disk, so a restart can pick up recordings that aren't in the schedule
     ("Record the rest", manual recordings)"""
+    clashes_changed()
     try:
         with open(ACTIVE_FILE, 'w', encoding='utf-8') as f:
             json.dump(list(ACTIVE_RECORDINGS.values()), f, default=str)
@@ -3929,6 +4079,7 @@ def check_watchlist():
         save_schedule()
 
 @app.route('/api/rules/<int:job_id>', methods=['POST'])
+@warns_of_clashes
 def api_rule_options(job_id):
     """Change a series rule's options. Body: {new_only: bool}"""
     job = next((j for j in scheduled_jobs if j.get('id') == job_id and j.get('type') == 'recurring_series'), None)
@@ -3945,6 +4096,7 @@ def weekdays_lower(days):
 
 # --- Flask Routes ---
 @app.route('/nlp_command', methods=['POST'])
+@warns_of_clashes
 def nlp_command():
     try:
         data = request.get_json()
@@ -4025,11 +4177,16 @@ def api_scheduled_recordings():
 
 def _program_start(prog):
     """Local start datetime of a guide program, or None"""
-    hm = parse_job_time(prog.get('time'))
-    if not (hm and prog.get('date')):
+    return _parse_start(prog.get('date'), prog.get('time'))
+
+@functools.lru_cache(maxsize=4096)
+def _parse_start(date, time_str):
+    # strptime is slow and a week's guide only has a few hundred distinct date/time pairs
+    hm = parse_job_time(time_str)
+    if not (hm and date):
         return None
     try:
-        return datetime.strptime(prog['date'], '%Y-%m-%d').replace(hour=hm[0], minute=hm[1])
+        return datetime.strptime(date, '%Y-%m-%d').replace(hour=hm[0], minute=hm[1])
     except ValueError:
         return None
 
@@ -4100,6 +4257,7 @@ def api_guide():
     window_end = window_start + timedelta(hours=hours)
 
     epg = get_epg() or []
+    clashes = schedule_clashes()
     out_channels = []
     guide_end = None
     for num, name, call, progs in _guide_channels(epg):
@@ -4116,6 +4274,7 @@ def api_guide():
             if end_dt <= window_start or start_dt >= window_end or key in seen:
                 continue
             seen.add(key)
+            coverage = _guide_coverage(num, start_dt)
             items.append({
                 'title': p.get('title', ''),
                 'episode_title': p.get('episode_title') or '',
@@ -4129,7 +4288,8 @@ def api_guide():
                 'start': start_dt.timestamp(),
                 'end': end_dt.timestamp(),
                 'duration': duration,
-                'recording': _guide_coverage(num, start_dt),
+                'recording': coverage,
+                'clash': clash_message(clashes.get((coverage['job_id'], start_dt))) if coverage else None,
                 'recording_now': recording_now(num, start_dt, end_dt),
                 'image': p.get('image') or '',
                 'new': is_new_listing(p),
@@ -4162,6 +4322,7 @@ def _find_guide_program(channel_number, date, time_str):
     return None
 
 @app.route('/api/guide/record', methods=['POST'])
+@warns_of_clashes
 def api_guide_record():
     """Record one guide program ('episode') or every airing of it in this time slot ('series').
     Body: {channel_number, date, time, mode}"""
@@ -4516,6 +4677,8 @@ def setup_page():
         'hidden_channels': config.get('guide', 'hidden_channels', []) or [],
         'jellyfin': c.get('jellyfin') or {}, 'jellyseerr': c.get('jellyseerr') or {}, 'mqtt': c.get('mqtt') or {},
         'quality': config.get('recording', 'quality', 'standard') or 'standard',
+        'captions': bool(config.get('recording', 'captions', True)),
+        'nfo': bool(config.get('recording', 'nfo', True)),
     }
     return render_template('setup.html', settings=settings, first_run=not config.is_configured(),
                            qualities=[(k, p['label']) for k, p in QUALITY_PROFILES.items()],
@@ -4663,6 +4826,9 @@ def api_setup_save():
         c.setdefault('directories', {})['recordings'] = str(data['recordings']).strip()
     if data.get('quality') in QUALITY_PROFILES:
         c.setdefault('recording', {})['quality'] = data['quality']
+    for key in ('captions', 'nfo'):
+        if isinstance(data.get(key), bool):
+            c.setdefault('recording', {})[key] = data[key]
     c.setdefault('guide', {})['distant_channels'] = [str(m) for m in data.get('distant_channels', []) if str(m).isdigit()]
     if 'hidden_channels' in data:
         c['guide']['hidden_channels'] = [str(n) for n in data['hidden_channels'] if str(n).strip()]
@@ -4881,6 +5047,18 @@ def _next_airing(job, now):
 def upcoming_recordings():
     """Schedule entries that will still record, soonest first, shaped for display"""
     now = datetime.now()
+    # Each job's first airing that won't get a tuner (badged until the clash is resolved)
+    first_clash = {}
+    for clash in sorted(schedule_clashes().values(), key=lambda c: c['start']):
+        first_clash.setdefault(clash['job_id'], clash)
+
+    def clash_info(job_ids, nxt):
+        clash = min((first_clash[i] for i in job_ids if i in first_clash), key=lambda c: c['start'], default=None)
+        if not clash:
+            return None
+        return {'when': _when_label(clash['start'], now), 'next': clash['start'] == nxt,
+                'with': list(dict.fromkeys(clash['with'])), 'message': clash_message(clash)}
+
     items = []
     for job in scheduled_jobs:
         if not isinstance(job, dict):
@@ -4904,6 +5082,7 @@ def upcoming_recordings():
                 'start': nxt.timestamp() if nxt else None,
                 'duration': int(eps[0].get('duration') or 30) if eps else 0,
                 'airing': bool(nxt and nxt <= now), 'new_only': True, 'skip': False,
+                'clash': clash_info([j.get('id') for j in eps], nxt),
             })
             continue
         if job.get('series_rule'):
@@ -4954,6 +5133,7 @@ def upcoming_recordings():
             'start': nxt.timestamp(),
             'duration': duration,
             'airing': nxt <= now,
+            'clash': clash_info([job.get('id')], nxt),
         })
     # Unscheduled entries (watches, series waiting for the guide) go last. No float('inf') here:
     # it serializes as Infinity, which isn't JSON, and browsers reject the whole response.
@@ -5027,6 +5207,7 @@ def api_status():
         'notices': [n for n in NOTICES if now - datetime.fromisoformat(n['at']) < timedelta(days=2)],
         'tuners': tuner_details(),
         'this_pc': _local_ip(),
+        'version': __version__,
     })
 
 @app.route("/api/status/dismiss_notices", methods=["POST"])
@@ -5137,7 +5318,7 @@ def start_mqtt():
         print("[MQTT] paho-mqtt isn't installed; Home Assistant integration is off (pip install paho-mqtt)")
         return
     tuners = tuner_details() or []
-    MQTT_BRIDGE = MqttBridge(cfg, mqtt_state, mqtt_command, tuner_count=len(tuners) or 2)
+    MQTT_BRIDGE = MqttBridge(cfg, mqtt_state, mqtt_command, tuner_count=len(tuners) or 2, version=__version__)
     MQTT_BRIDGE.start()
     print(f"[MQTT] Home Assistant integration on ({cfg['host']}:{cfg.get('port', 1883)})")
 
@@ -5184,6 +5365,7 @@ def manual_auto_categorize():
         }), 500
 
 @app.route("/schedule", methods=["POST"])
+@warns_of_clashes
 def schedule_recording():
     data = request.get_json()
     print(f"Schedule request data: {data}")  # Debug logging

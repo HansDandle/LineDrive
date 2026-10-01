@@ -29,7 +29,8 @@
     toastEl.classList.toggle('error', !!isError);
     toastEl.classList.add('show');
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => toastEl.classList.remove('show'), 4000);
+    // Long messages (a tuner-clash heads-up) stay up long enough to read
+    toast._t = setTimeout(() => toastEl.classList.remove('show'), Math.max(4000, msg.length * 60));
   }
 
   async function postJSON(url, body) {
@@ -209,6 +210,8 @@
             } }),
           el('span', { text: 'New only' }));
       }
+      const clash = item.clash && el('span', { class: 'tag tag-clash', title: item.clash.message,
+        text: 'No free tuner' + (item.clash.next ? '' : ' ' + item.clash.when) });
       return el('li', { class: 'up-item' + (item.airing ? ' is-airing' : '') + (item.skip ? ' is-skipped' : '') },
         el('div', { class: 'up-when' },
           el('span', { class: 'up-time', text: item.when }),
@@ -216,8 +219,10 @@
         el('div', { class: 'up-body' },
           el('p', { class: 'up-title' }, item.title, kind,
             item.airing && el('span', { class: 'tag tag-live', text: 'On now' }),
-            item.skip && el('span', { class: 'tag', text: item.skip_reason === 'already recorded' ? 'Already have it, will skip' : 'Rerun, will skip' })),
+            item.skip && el('span', { class: 'tag', text: item.skip_reason === 'already recorded' ? 'Already have it, will skip' : 'Rerun, will skip' }),
+            clash),
           item.episode && el('p', { class: 'up-episode', text: item.episode }),
+          item.clash && el('p', { class: 'up-clash small', text: item.clash.message }),
           el('p', { class: 'muted small', text: where }),
           newOnly),
         cancel);

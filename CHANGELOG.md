@@ -5,6 +5,16 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-10-01
+
+### Added
+- Tuner clash warnings. Scheduling a recording that would need more tuners than you have still schedules it, but says which airing won't record and what's holding the tuners. Until you cancel one, the recording left without a tuner has a **No free tuner** badge in Upcoming and an amber mark in the guide. Overlaps are worked out for the week ahead, the way the recordings will actually take tuners (counting sports overrun padding, and not counting airings that will be skipped as reruns or already recorded).
+- The version number, in the footer of the home and Settings pages, in `/api/status`, and on the Home Assistant device.
+- Settings → Recordings: switches for the closed-caption `.srt` and the `.nfo` saved beside each recording (`recording.captions`, and the new `recording.nfo`).
+
+### Changed
+- Guide lookups are faster (listings indexed by channel, start times parsed once).
+
 ## [3.3.0] - 2026-09-29
 
 ### Added

@@ -275,6 +275,7 @@
     return {
       hdhr_ip: v('hdhrIp'), zip_code: v('zipCode'), timezone: tzSelect.value, recordings: v('recordings'),
       quality: v('quality'),
+      captions: $('captions').checked, nfo: $('nfo').checked,
       // Only once the tuner's stations are listed, so a tuner that didn't answer doesn't clear them
       distant_channels: stations.length ? Array.from(stationState().distant) : undefined,
       hidden_channels: stations.length ? Array.from(stationState().hidden) : undefined,

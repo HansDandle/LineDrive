@@ -259,6 +259,8 @@ input[type="time"] { color-scheme: dark; }
 }
 .tag-series { background: var(--accent-soft); color: var(--accent); }
 .tag-live { background: var(--rec-soft); color: var(--rec); }
+.tag-clash { background: rgba(245, 185, 66, 0.15); color: #f5b942; cursor: help; }
+.up-clash { margin: 2px 0 0; color: #f5b942; }
 .empty { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; color: var(--text-2); }
 
 /* Recent */

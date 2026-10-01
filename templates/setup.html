@@ -93,6 +93,12 @@
                     </select>
                     <p class="field-note">Sizes are for full-HD (1080) stations; 720p stations like ABC and FOX come out smaller. 720p looks close to Standard on most TVs at a third of the size, and uses much less CPU, which helps when several shows record at once. Original keeps the broadcast untouched.</p>
                 </div>
+                <fieldset class="field">
+                    <legend>Extra files beside each recording</legend>
+                    <label class="check"><input type="checkbox" id="captions"{% if settings.captions %} checked{% endif %} /><span>Closed captions as subtitles <span class="muted small">(.srt)</span></span></label>
+                    <label class="check"><input type="checkbox" id="nfo"{% if settings.nfo %} checked{% endif %} /><span>Show details <span class="muted small">(.nfo: plot, air date, season and episode)</span></span></label>
+                    <p class="field-note">Jellyfin, Emby and Kodi read the .nfo for the plot and air date; without it they go by the file name. Plex ignores .nfo files.</p>
+                </fieldset>
                 {% if in_docker %}
                 <p class="muted">Recordings are saved to <code>/recordings</code> in the container. Map it to a folder on your server in <code>docker-compose.yml</code>.</p>
                 {% else %}
@@ -148,6 +154,10 @@
             </div>
         </form>
     </main>
+
+    <footer class="footer">
+        <p>LineDrive {{ version }} · <a href="https://github.com/HansDandle/LineDrive/blob/main/CHANGELOG.md" target="_blank" rel="noopener">What's new</a></p>
+    </footer>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script>window.LINEDRIVE_SETTINGS = {{ settings|tojson }};</script>
