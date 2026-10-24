@@ -25,6 +25,7 @@ plain-English questions ("when's the next basketball game?"), and recordings you
   - "record Abbott Elementary when it comes back" (it watches the guide and starts recording when the new season shows up)
 - **Series that don't waste tuners.** "New episodes only" follows each first-run episode wherever it airs (preemptions, sister stations), skips reruns, and skips episodes you already have.
 - **Recordings your media server understands.** `TV/<Show>/Season 52/Show - S52E01 - Episode Title.mp4` (or air-date names), `Movies/<Title (Year)>/`, plus a `.nfo` with the plot and air date and a `.srt` of the broadcast's closed captions (either can be turned off in Settings). Jellyfin, Emby, Kodi and Plex pick them up with proper titles and subtitles.
+- **IPTV too (optional).** Add an M3U playlist and its channels join the guide, recordings and live TV, with the playlist's XMLTV guide. Your provider's stream limit counts as its tuners.
 - **Live TV in the guide.** Watch anything that's on now in a player beside the guide, with picture-in-picture and full screen, or hand the stream to VLC.
 - **Ad breaks marked or cut (optional).** Comskip finds the commercials. LineDrive either adds them as chapters, so Jellyfin (with its Chapter Segments plugin) and Kodi can skip them, or cuts them out for Plex and everything else, keeping the uncut original for a week in case a cut was wrong.
 - **Tuner-aware.** Warns when you schedule more recordings at once than you have tuners, and badges the one that won't get a tuner until you sort it out. When the same episode airs again with a tuner free (a late-night repeat, a sister station), it offers **Record that one instead**. Refuses to "record" when every tuner is busy (and tells you who has them), reports failed recordings, and has a **kill switch** for streams other apps leave open (hello, Jellyfin live TV).
@@ -87,7 +88,7 @@ Then open `http://localhost:5050` and follow the setup page.
 
 ## How it works
 
-**The guide** comes from two free sources. Gracenote's over-the-air listings for your US ZIP or Canadian postal code (the same data behind TV-listing sites) cover a week; near the border they include stations from both countries. If your antenna reaches a city your lineup doesn't include, enter that city's code as well (`L2E 6S4, 14201`); **Test** in Settings lists any of your channels that still have no listings. SiliconDust's own guide for your tuner, the one the HDHomeRun app uses, covers about a day ahead and adds series IDs, original air dates (better rerun detection), artwork, and channels Gracenote doesn't list. **Outside the US and Canada**, leave the ZIP code empty and the guide comes from SiliconDust alone. Channels your antenna doesn't get aren't shown; if it picks up a neighboring city, mark those stations "out of market" in Settings and LineDrive prefers local ones. Channels you don't want (too weak, shopping, duplicates) can be hidden: tick **Hide** next to the station in **Settings → Stations**, or open the station (▸) to hide single subchannels like 7.2 while keeping 7.1 (or use **Hide channel** in any show's details). After **Check signal**, Settings offers to hide the weak ones.
+**The guide** comes from two free sources. Gracenote's over-the-air listings for your US ZIP or Canadian postal code (the same data behind TV-listing sites) cover a week; near the border they include stations from both countries. If your antenna reaches a city your lineup doesn't include, enter that city's code as well (`L2E 6S4, 14201`); **Test** in Settings lists any of your channels that still have no listings. SiliconDust's own guide for your tuner, the one the HDHomeRun app uses, covers about a day ahead and adds series IDs, original air dates (better rerun detection), artwork, and channels Gracenote doesn't list. **Outside the US and Canada**, leave the ZIP code empty and the guide comes from SiliconDust alone, or give an **XMLTV guide** (a URL or a file, such as a UK Freeview guide from an XMLTV provider) for a full week: its channels are matched to yours by number or name, and **Test** shows which matched (map the rest with `epg.xmltv_channels`). Channels your antenna doesn't get aren't shown; if it picks up a neighboring city, mark those stations "out of market" in Settings and LineDrive prefers local ones. Channels you don't want (too weak, shopping, duplicates) can be hidden: tick **Hide** next to the station in **Settings → Stations**, or open the station (▸) to hide single subchannels like 7.2 while keeping 7.1 (or use **Hide channel** in any show's details). After **Check signal**, Settings offers to hide the weak ones.
 
 **XMLTV.** The guide is also served as XMLTV at `http://<your-server>:5050/guide.xml`, so Jellyfin, Plex, Channels and other apps can use the same merged listings. Channel ids are the tuner's channel numbers (`4.1`).
 
@@ -131,6 +132,15 @@ Everything is on the **Settings** page (gear icon). It writes `config.json` in t
 | Jellyseerr | URL + API key (Settings → General). |
 | Sonarr | URL + API key (Settings → General). After an episode records, LineDrive unmonitors it in Sonarr. Only that episode's monitored flag changes; Sonarr doesn't need to see the recordings folder. Movies and sports are skipped. |
 | Home Assistant | Your MQTT broker. The LineDrive device appears on its own. |
+
+### IPTV
+
+**Settings → Integrations → IPTV** takes one or more M3U playlists. Each playlist's channels join the guide, and record and play like antenna channels.
+
+- **At once:** how many channels the provider lets you stream together. LineDrive treats each stream as a tuner, so clash warnings and "all tuners busy" work for IPTV channels too, and an IPTV stream is never counted as an antenna tuner (or the other way round).
+- **Guide:** the playlist's own XMLTV link (`url-tvg`), or the address you give, matched to channels by `tvg-id`.
+- **Channel numbers:** the playlist's `tvg-chno` where it has one that's free, otherwise 1001, 1002 and so on (2001… for a second playlist).
+- **Big playlists:** to keep only some groups, add `"groups": ["News", "Sports"]` to that playlist in `config.json`, or hide channels in **Settings → Stations**.
 
 ### Graphics card encoding
 
@@ -185,6 +195,10 @@ With MQTT set up, LineDrive shows up as a device:
 - **Can't reach `http://<this PC's IP>:5050` from the same Windows PC** (other devices work): that's Docker Desktop with WSL "mirrored" networking. Use `http://localhost:5050` on that PC, or add `hostAddressLoopback=true` under `[experimental]` in `%UserProfile%\.wslconfig`.
 - **Recordings have blocky glitches.** That's reception: the damage is in the broadcast LineDrive received. The guide's signal bars show which channels are weak; **Check now** in a show's details re-measures one.
 
+## Support
+
+LineDrive is free and always will be. If it saves you a DVR subscription and you'd like to say thanks, there's a tip jar at [ko-fi.com/hansdandle](https://ko-fi.com/hansdandle). Bug reports and feature ideas help just as much.
+
 ## Security
 
 LineDrive has no login. Run it on your home network only. Don't port-forward it to the internet; use a VPN (Tailscale, WireGuard) if you want remote access.
@@ -210,6 +224,8 @@ The tests use a fixed week of real listings (`tests/fixtures/guide_sample.json`)
 | `encoders.py` | CPU and graphics card video encoders, with tests and fallback |
 | `tuners.py` | several HDHomeRun boxes as one pool of tuners |
 | `live.py` | live TV for the guide's player (HLS) |
+| `epg_xmltv.py` | XMLTV guide import |
+| `iptv.py` | IPTV M3U playlists |
 | `mqtt_bridge.py` | Home Assistant integration |
 
 ## Legal

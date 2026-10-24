@@ -591,13 +591,15 @@ def visible_epg():
 SD_GUIDE_TTL = 4 * 3600  # SiliconDust's free guide only reaches a day or so ahead, so refresh it more often
 
 def _get_epg_locked():
-    """Gracenote (with ZIP or Canadian postal codes: a week of listings) merged with SiliconDust's guide for the
+    """Gracenote (with ZIP or Canadian postal codes: a week of listings) and an XMLTV guide
+    (epg.xmltv, for channels Gracenote doesn't list), merged with SiliconDust's guide for the
     tuner (about a day ahead: series IDs, original air dates, artwork, and the whole guide outside
-    the US). See epg_hdhomerun."""
+    the US). See epg_hdhomerun and epg_xmltv."""
     now = time.time()
     if not HDHR_IP:
         return EPG_CACHE.get('data') or []  # not set up yet: nothing to fetch
     zip_code = config.get('epg', 'zip_code', '')
+    xmltv = config.get('epg', 'xmltv', '') or ''
 
     # Load from disk if memory cache is empty
     if not EPG_CACHE["data"]:
@@ -609,7 +611,7 @@ def _get_epg_locked():
     # Check if we need to fetch: cache empty or expired. An empty result is retried,
     # but at most every 10 minutes so a failing guide service isn't hammered.
     retry_ok = now - EPG_CACHE.get("last_attempt", 0) > 600
-    if zip_code and ((not EPG_CACHE["data"] and retry_ok) or cache_age > EPG_TTL):
+    if (zip_code or xmltv or IPTV_GUIDES) and ((not EPG_CACHE["data"] and retry_ok) or cache_age > EPG_TTL):
         try:
             if not EPG_CACHE["data"]:
                 print("EPG: fetching fresh data (no cache available)")
@@ -617,7 +619,12 @@ def _get_epg_locked():
                 print(f"EPG: fetching fresh data (cache expired after {cache_age/60:.1f} minutes)")
 
             EPG_CACHE["last_attempt"] = now
-            fresh = fetch_zap2it_epg()
+            fresh = fetch_zap2it_epg() if zip_code else []
+            if zip_code:
+                print(f"EPG: fetched {len(fresh)} programs from Gracenote")
+            if xmltv:
+                fresh += xmltv_listings(xmltv, {str(p.get('channel_number')) for p in fresh} | set(IPTV_URLS))[0]
+            fresh += iptv_listings()
             if not fresh:
                 print("EPG: fetch returned no programs; keeping previous cache")
             else:
@@ -625,7 +632,6 @@ def _get_epg_locked():
                 EPG_CACHE["timestamp"] = now
                 EPG_CACHE["sd_timestamp"] = EPG_CACHE["sd_attempt"] = 0  # merge SiliconDust into it below
                 changed = True
-                print(f"EPG: fetched {len(fresh)} programs from Gracenote")
         except Exception as e:
             print(f"EPG fetch failed: {e}")
 
@@ -647,7 +653,7 @@ def _get_epg_locked():
         if sd:
             EPG_CACHE["data"] = merge_guides(EPG_CACHE["data"] or [], sd)
             EPG_CACHE["sd_timestamp"] = now
-            if not zip_code:
+            if not (zip_code or xmltv or IPTV_GUIDES):
                 EPG_CACHE["timestamp"] = now
             changed = True
             print(f"EPG: merged {len(sd)} SiliconDust listings")
@@ -657,6 +663,34 @@ def _get_epg_locked():
     else:
         print(f"EPG: using cached data (age: {cache_age/60:.1f} minutes)")
     return EPG_CACHE["data"] or []
+
+def xmltv_listings(source, skip=()):
+    """XMLTV listings for the tuners' channels (except channels in skip, which another guide
+    covers), and the match report. Config epg.xmltv_channels: {xmltv id: channel number}."""
+    import epg_xmltv
+    try:
+        data = epg_xmltv.load(source)
+        lineup = {num: name for num, name in channels.items() if num not in skip}
+        found, report = epg_xmltv.listings(data, lineup, config.get('epg', 'xmltv_channels', {}) or {})
+    except Exception as e:
+        print(f"EPG: XMLTV guide failed ({source}): {e}")
+        return [], {'error': str(e)}
+    print(f"EPG: {len(found)} programs from XMLTV for {report['matched']} channels")
+    return found, report
+
+def iptv_listings():
+    """Each IPTV source's guide (its XMLTV), matched to its channels by tvg-id, then by name"""
+    import epg_xmltv
+    found = []
+    for source, by_id, lineup in IPTV_GUIDES:
+        try:
+            listings, report = epg_xmltv.listings(epg_xmltv.load(source), lineup, by_id)
+        except Exception as e:
+            print(f"EPG: IPTV guide failed ({source}): {e}")
+            continue
+        print(f"EPG: {len(listings)} programs for {report['matched']} of {len(lineup)} IPTV channels")
+        found += listings
+    return found
 
 def search_cached_epg(query, days=7):
     """Search through cached EPG data instead of fetching fresh data"""
@@ -747,6 +781,27 @@ def get_hdhr_channels(ips):
     return tuner_pool.merge_lineups([(ip, _fetch_lineup(ip)) for ip in ips])
 
 channels, CHANNEL_BOXES = get_hdhr_channels(HDHR_IPS)
+
+# IPTV playlists (config iptv): each source is one more "box", with max_streams tuners
+import iptv
+IPTV_URLS = {}    # channel number -> stream URL
+IPTV_LIMITS = {}  # source box id -> streams allowed at once
+IPTV_GUIDES = []  # (XMLTV location, {tvg-id: channel number}, {channel number: name})
+for _source, _box, _guide, _entries in iptv.channels(config.get('iptv', default=[]) or [], set(channels)):
+    IPTV_LIMITS[_box] = max(1, int(_source.get('max_streams') or 1))
+    for _e in _entries:
+        channels[_e['number']] = _e['name']
+        CHANNEL_BOXES[_e['number']] = [_box]
+        IPTV_URLS[_e['number']] = _e['url']
+    if _guide:
+        IPTV_GUIDES.append((_guide, {e['tvg_id']: e['number'] for e in _entries if e['tvg_id']},
+                            {e['number']: e['name'] for e in _entries}))
+    print(f"[IPTV] {_source.get('name') or _box}: {len(_entries)} channels, {IPTV_LIMITS[_box]} at once")
+ALL_BOXES = HDHR_IPS + list(IPTV_LIMITS)
+
+def stream_url(box, channel):
+    """Where a box's (or IPTV source's) stream of a channel is"""
+    return IPTV_URLS[str(channel)] if iptv.is_iptv(box) else tuner_pool.stream_url(box, channel)
 days_list = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
 TUNER_COUNT = None  # from the devices; remembered so a moment they don't answer doesn't hide clashes
@@ -843,6 +898,13 @@ def _explain_ffmpeg_failure(tail):
     return (tail[-1] if tail else 'ffmpeg exited with an error')[:160]
 
 def _box_status(ip):
+    if iptv.is_iptv(ip):
+        # An IPTV source's "tuners" are its streams; only LineDrive uses them
+        using = [r['channel_number'] for r in list(ACTIVE_RECORDINGS.values()) if r.get('box') == ip]
+        using += [sess.channel for sess in list(LIVE.sessions.values()) if sess.box == ip] if LIVE else []
+        return [{'Resource': f'tuner{i}', 'VctNumber': using[i] if i < len(using) else '',
+                 'VctName': channels.get(using[i], '') if i < len(using) else ''}
+                for i in range(max(IPTV_LIMITS.get(ip, 1), len(using)))]
     try:
         return requests.get(f"http://{ip}/status.json", timeout=3).json()
     except Exception:
@@ -854,7 +916,7 @@ def tuner_details():
     channel on that box; otherwise another app/device holds it."""
     global TUNER_COUNT, BOXES_DOWN
     ours = {(rec.get('box') or HDHR_IP, rec['channel_number']) for rec in list(ACTIVE_RECORDINGS.values())}
-    statuses = [(ip, _box_status(ip)) for ip in HDHR_IPS]
+    statuses = [(ip, _box_status(ip)) for ip in ALL_BOXES]
     tuners, BOXES_DOWN = tuner_pool.combine_status(statuses, BOX_TUNERS, ours, LIVE.holding() if LIVE else ())
     TUNER_COUNT = sum(BOX_TUNERS.values()) or TUNER_COUNT
     return tuners
@@ -889,7 +951,11 @@ def no_tuner_message(channel=None):
     """A reason to refuse starting a recording right now, or None if a tuner is free"""
     free, busy = tuner_usage(channel)
     if free == 0:
-        what = "Both tuners are" if len(busy) == 2 else f"All {len(busy)} tuners are" if len(busy) > 1 else "The tuner is"
+        if channel is not None and str(channel) in IPTV_URLS:
+            # An IPTV source: its "tuners" are the streams the provider allows at once
+            what = "Your IPTV provider's stream is" if len(busy) == 1 else f"All {len(busy)} of your IPTV provider's streams are"
+        else:
+            what = "Both tuners are" if len(busy) == 2 else f"All {len(busy)} tuners are" if len(busy) > 1 else "The tuner is"
         return f"{what} in use ({', '.join(busy)}). Stop one of those to record this."
     return None
 
@@ -934,21 +1000,43 @@ def planned_airings(jobs, now_dt, horizon=CLASH_HORIZON, padding=lambda channel,
     out.sort(key=lambda a: (a[0], a[2]))
     return [(start, end, job) for start, end, _, job in out]
 
-def find_clashes(airings, busy_until, tuners):
+def find_clashes(airings, busy_until, tuners, carriers=None):
     """Hand out tuners the way the recordings will take them: each airing gets one if any is free
-    when it starts, and keeps it to the end. busy_until: [(end, title)] already recording.
-    Sports overrun padding counts as busy: when a game runs long, the show after it really is
-    still on then. Returns [(start, end, job, [titles holding every tuner then])] for airings
-    left without one."""
-    held = list(busy_until)
+    when it starts, and keeps it to the end. tuners: a count, or {box: count} with carriers
+    ({channel: [boxes that have it]}), so a recording only takes a tuner on a box (or IPTV
+    source) that carries its channel. busy_until: [(end, title)] or [(end, title, box)] already
+    recording. Sports overrun padding counts as busy: when a game runs long, the show after it
+    really is still on then. Returns [(start, end, job, [titles holding every tuner it could
+    use then])] for airings left without one."""
+    pools = tuners if isinstance(tuners, dict) else {None: tuners}
+    order = list(pools)
+
+    def usable(job):
+        boxes = [b for b in (carriers or {}).get(str(job.get('channel_number')), []) if b in pools]
+        return boxes or order
+
+    held = [(h[0], h[1], h[2] if len(h) > 2 and h[2] in pools else order[0]) for h in busy_until]
     out = []
     for start, end, job in airings:
-        held = [(e, t) for e, t in held if e > start]  # back to back is fine
-        if len(held) >= tuners:
-            out.append((start, end, job, [t for _, t in sorted(held, key=lambda h: h[0])]))
+        held = [h for h in held if h[0] > start]  # back to back is fine
+        boxes = usable(job)
+        free = {b: pools[b] - sum(1 for h in held if h[2] == b) for b in boxes}
+        open_boxes = [b for b in boxes if free[b] > 0]
+        if not open_boxes:
+            out.append((start, end, job, [h[1] for h in sorted(held, key=lambda h: h[0]) if h[2] in boxes]))
         else:
-            held.append((end, job.get('title') or 'Recording'))
+            # As boxes_for() picks at record time: the most free tuners, then the order listed
+            box = min(open_boxes, key=lambda b: (-free[b], order.index(b)))
+            held.append((end, job.get('title') or 'Recording', box))
     return out
+
+def tuner_pools():
+    """({box or IPTV source: tuner count}, {channel: [boxes]}) for planning, or (0, None) when
+    the tuners' counts aren't known yet"""
+    if TUNER_COUNT is None:
+        tuner_details()
+    pools = {b: n for b, n in BOX_TUNERS.items() if n}
+    return (pools, CHANNEL_BOXES) if pools else (TUNER_COUNT or 0, None)
 
 def clashes_changed():
     _CLASH_CACHE['data'] = None
@@ -959,20 +1047,20 @@ def schedule_clashes():
     Cached for a minute; changing the schedule or what's recording clears it."""
     if _CLASH_CACHE['data'] is not None and time.time() - _CLASH_CACHE['at'] < 60:
         return _CLASH_CACHE['data']
-    if TUNER_COUNT is None:
-        tuner_details()
+    pools, carriers = tuner_pools()
     data = {}
-    if TUNER_COUNT:
+    if pools:
         now = datetime.now()
         busy = [(datetime.fromisoformat(r['ends_at']),
-                 r.get('title') or f"{r.get('channel_number', '')} {r.get('channel_name', '')}".strip())
+                 r.get('title') or f"{r.get('channel_number', '')} {r.get('channel_name', '')}".strip(),
+                 r.get('box') or HDHR_IP)
                 for r in list(ACTIVE_RECORDINGS.values())]
         airings = planned_airings(scheduled_jobs, now,
                                   padding=lambda channel, slot: overrun_padding(channel, slot)[0],
                                   skip=lambda job, slot: bool(skip_reason(job, slot)[0]))
-        for start, end, job, holders in find_clashes(airings, busy, TUNER_COUNT):
+        for start, end, job, holders in find_clashes(airings, busy, pools, carriers):
             data[(job.get('id'), start)] = {'job_id': job.get('id'), 'title': job.get('title') or 'Recording',
-                                            'start': start, 'with': holders,
+                                            'start': start, 'with': holders, 'tuners': len(holders),
                                             'alternative': other_airing(job, start, airings, busy, now)}
     _CLASH_CACHE.update(at=time.time(), data=data)
     return data
@@ -985,9 +1073,10 @@ def clash_warning(clashes):
     """'Heads up: The Voice (Thu 8:00 PM) won't record: both tuners will be busy with NCIS and Survivor.'"""
     if not clashes:
         return ''
-    n = TUNER_COUNT or 0
-    tuners = 'the tuner' if n == 1 else 'both tuners' if n == 2 else f'all {n} tuners'
-    parts = [f"{c['title']} ({_when_label(c['start'])}) won't record: {tuners} will be busy with "
+    def tuners(c):
+        n = c.get('tuners') or TUNER_COUNT or 0
+        return 'the tuner' if n == 1 else 'both tuners' if n == 2 else f'all {n} tuners'
+    parts = [f"{c['title']} ({_when_label(c['start'])}) won't record: {tuners(c)} will be busy with "
              f"{_and_list(c['with'])}" for c in sorted(clashes, key=lambda c: c['start'])[:3]]
     more = f" (and {len(clashes) - 3} more)" if len(clashes) > 3 else ''
     alts = [f"{c['title']} also airs {c['alternative']['label']}" for c in clashes if c.get('alternative')]
@@ -1022,7 +1111,8 @@ def other_airing(job, start, airings, busy, now):
         return None  # no way to tell which episode it is
     show = _norm_title(prog.get('title'))
     distant = distant_channels()
-    before = {(id(a[2]), a[0]) for a in find_clashes(airings, busy, TUNER_COUNT)}
+    pools, carriers = tuner_pools()
+    before = {(id(a[2]), a[0]) for a in find_clashes(airings, busy, pools, carriers)}
     options = []
     for p in visible_epg():
         num = str(p.get('channel_number'))
@@ -1036,10 +1126,10 @@ def other_airing(job, start, airings, busy, now):
         options.append((num in distant, when, num, p))
     for _, when, num, p in sorted(options, key=lambda o: (o[0], o[1], _chan_sort(o[2]))):
         end = when + timedelta(minutes=int(p.get('duration') or 30))
-        moved = {'title': job.get('title') or p.get('title')}
+        moved = {'title': job.get('title') or p.get('title'), 'channel_number': num}
         trial = [a for a in airings if not (a[2] is job and a[0] == start)] + [(when, end, moved)]
         trial.sort(key=lambda a: a[0])  # stable: it goes after anything already starting then
-        after = {(id(a[2]), a[0]) for a in find_clashes(trial, busy, TUNER_COUNT)}
+        after = {(id(a[2]), a[0]) for a in find_clashes(trial, busy, pools, carriers)}
         if (id(moved), when) in after or not after <= before:
             continue
         name = channels.get(num, p.get('call_sign', ''))
@@ -1126,7 +1216,8 @@ def _free_tuner(channel=None):
     """(box, tuner on that box) free for measuring a channel, or None"""
     tuners = tuner_details()
     boxes = CHANNEL_BOXES.get(str(channel)) if channel is not None else None
-    free = [t for t in tuners or [] if not t['in_use'] and (not boxes or t['box'] in boxes)]
+    free = [t for t in tuners or [] if not t['in_use'] and not iptv.is_iptv(t['box'])
+            and (not boxes or t['box'] in boxes)]
     # The last one: recordings ask for "any tuner", which starts at the first
     return (free[-1]['box'], free[-1]['box_index']) if free else None
 
@@ -1154,10 +1245,11 @@ def scan_signals():
     from hdhomerun_control import measure_signal
     if SIGNAL_STATE['scanning'] or not channels:
         return
-    SIGNAL_STATE.update(scanning=True, done=0, total=len(channels))
+    antenna = [c for c in channels if c not in IPTV_URLS]  # IPTV channels have no signal to measure
+    SIGNAL_STATE.update(scanning=True, done=0, total=len(antenna))
     try:
         measured = set()
-        for ch in sorted(channels, key=lambda c: tuple(int(x) for x in c.split('.') if x.isdigit())):
+        for ch in sorted(antenna, key=lambda c: tuple(int(x) for x in c.split('.') if x.isdigit())):
             if ch in measured:
                 SIGNAL_STATE['done'] += 1
                 continue
@@ -1225,6 +1317,8 @@ def api_signal_check():
     ch = str((request.get_json() or {}).get('channel', ''))
     if ch not in channels:
         return jsonify({'error': 'Unknown channel'}), 400
+    if ch in IPTV_URLS:
+        return jsonify({'error': 'That’s an IPTV channel, which has no antenna signal to check.'}), 400
     summary = check_signal(ch)
     if summary is None:
         return jsonify({'error': 'Every tuner is in use right now, so the signal can’t be checked.'}), 409
@@ -1845,7 +1939,7 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
 
     stop_event.clear()
     began = datetime.now()
-    url = tuner_pool.stream_url(boxes[0], channel_key)
+    url = stream_url(boxes[0], channel_key)
     ACTIVE_RECORDINGS.get(os.path.basename(filepath), {})['box'] = boxes[0]
 
     # Determine ffmpeg binary: prefer configured path, fallback to system ffmpeg
@@ -4697,7 +4791,7 @@ def api_guide():
             })
         items.sort(key=lambda i: i['start'])
         out_channels.append({'number': num, 'name': name, 'call_sign': call or '', 'programs': items,
-                             'signal': signal_summary(num)})
+                             'signal': signal_summary(num), 'iptv': num in IPTV_URLS})
 
     return jsonify({
         'window': {'start': window_start.timestamp(), 'end': window_end.timestamp()},
@@ -4873,7 +4967,7 @@ def api_watch(channel):
     busy = no_tuner_message(channel)
     if busy:
         return jsonify({'error': busy.replace('to record this', 'to watch this')}), 409
-    return jsonify({'url': tuner_pool.stream_url(boxes_for(channel)[0], channel), 'playlist': f"/watch/{channel}.m3u"})
+    return jsonify({'url': stream_url(boxes_for(channel)[0], channel), 'playlist': f"/watch/{channel}.m3u"})
 
 # ---- Live TV in the guide ----------------------------------------------------------------------
 import live as live_tv
@@ -4910,7 +5004,7 @@ def api_live_start():
     box = boxes_for(channel)[0]
     args, encoder = live_video_args(ffmpeg_bin)
     try:
-        session = LIVE.start(channel, box, tuner_pool.stream_url(box, channel), ffmpeg_bin, args,
+        session = LIVE.start(channel, box, stream_url(box, channel), ffmpeg_bin, args,
                              int(config.get('live', 'max_viewers', 2) or 2), encoder)
     except live_tv.LiveError as e:
         return jsonify({'error': str(e)}), 409
@@ -4956,7 +5050,7 @@ def watch_playlist(channel):
     converted. Closing the player frees the tuner."""
     if channel not in channels:
         return jsonify({'error': f"No channel {channel} on the tuner"}), 404
-    body = f"#EXTM3U\n#EXTINF:-1,{channel} {channels[channel]}\n{tuner_pool.stream_url(boxes_for(channel)[0], channel)}\n"
+    body = f"#EXTM3U\n#EXTINF:-1,{channel} {channels[channel]}\n{stream_url(boxes_for(channel)[0], channel)}\n"
     return Response(body, mimetype='audio/x-mpegurl',
                     headers={'Content-Disposition': f'attachment; filename="LineDrive {channel}.m3u"'})
 
@@ -5209,12 +5303,14 @@ def setup_page():
     settings = {
         'hdhr_ip': config.get_hdhr_ip(),
         'zip_code': config.get('epg', 'zip_code', '') or '',
+        'xmltv': config.get('epg', 'xmltv', '') or '',
         'timezone': config.get('epg', 'timezone', '') or '',
         'recordings': config.get('directories', 'recordings', '') or '',
         'distant_channels': config.get('guide', 'distant_channels', []) or [],
         'hidden_channels': config.get('guide', 'hidden_channels', []) or [],
         'jellyfin': c.get('jellyfin') or {}, 'jellyseerr': c.get('jellyseerr') or {}, 'mqtt': c.get('mqtt') or {},
         'sonarr': c.get('sonarr') or {},
+        'iptv': [s for s in (c.get('iptv') or []) if isinstance(s, dict)],
         'quality': config.get('recording', 'quality', 'standard') or 'standard',
         'captions': bool(config.get('recording', 'captions', True)),
         'nfo': bool(config.get('recording', 'nfo', True)),
@@ -5285,6 +5381,45 @@ def _test_postal_codes(value):
                     " (SiliconDust's guide still gives them about a day).")
     return {'ok': True, 'message': message}
 
+def _test_iptv(source):
+    """Settings' Test for an IPTV playlist: its channels, groups and guide"""
+    if not source.get('m3u'):
+        return {'ok': False, 'message': 'Enter the M3U playlist URL or file'}
+    try:
+        header, entries = iptv.parse(iptv.load(source['m3u']))
+    except Exception as e:
+        return {'ok': False, 'message': f"Couldn't read the playlist: {e}"}
+    if not entries:
+        return {'ok': False, 'message': 'The playlist has no channels in it.'}
+    groups = sorted({e['group'] for e in entries if e['group']})
+    guide = source.get('xmltv') or header.get('url-tvg') or header.get('x-tvg-url') or ''
+    message = f"{len(entries)} channels"
+    if groups:
+        message += f" in {len(groups)} groups ({', '.join(groups[:5])}{', …' if len(groups) > 5 else ''})"
+    message += '. Guide: ' + (guide.split(',')[0] if guide else
+                              'none (add an XMLTV address, or the channels show without listings)') + '.'
+    if len(entries) > 200:
+        message += (" That's a lot of channels: hide the ones you don't want in Settings → Stations, or list the "
+                    'groups to keep with "groups" for this playlist in config.json.')
+    return {'ok': True, 'message': message}
+
+def _test_xmltv(source):
+    """Settings' Test for the XMLTV guide: how many of the tuner's channels it matched"""
+    if not source:
+        return {'ok': False, 'message': 'Enter an XMLTV URL or file path'}
+    found, report = xmltv_listings(source)
+    if 'error' in report:
+        return {'ok': False, 'message': f"Couldn't read it: {report['error']}"}
+    if not report['matched']:
+        return {'ok': False, 'message': "None of its channels matched yours by number or name. Map them in config.json "
+                                        "(epg.xmltv_channels, e.g. {\"BBCOne.uk\": \"1\"})."}
+    message = f"{len(found)} programs for {report['matched']} of your channels."
+    if report['unmatched']:
+        missing = report['unmatched']
+        message += (f" Not matched: {', '.join(missing[:8])}{f' and {len(missing) - 8} more' if len(missing) > 8 else ''}"
+                    " (map them with epg.xmltv_channels in config.json if it has them).")
+    return {'ok': True, 'message': message}
+
 @app.route('/api/setup/test', methods=['POST'])
 def api_setup_test():
     """Try one setting before saving. Body: {kind: zip|jellyfin|jellyseerr|mqtt, ...values}"""
@@ -5293,6 +5428,10 @@ def api_setup_test():
     try:
         if kind == 'zip':
             return jsonify(_test_postal_codes(str(data.get('zip_code', ''))))
+        if kind == 'xmltv':
+            return jsonify(_test_xmltv(str(data.get('xmltv', '')).strip()))
+        if kind == 'iptv':
+            return jsonify(_test_iptv(data))
         if kind == 'jellyfin':
             r = requests.get(data['url'].rstrip('/') + '/System/Info', headers={'X-Emby-Token': data.get('api_key', '')}, timeout=10)
             return jsonify({'ok': r.ok, 'message': f"Connected to {r.json().get('ServerName')} (Jellyfin {r.json().get('Version')})"
@@ -5370,9 +5509,12 @@ def api_setup_save():
     zip_code = ', '.join(codes)
     c = config.config
     old_zip = config.get('epg', 'zip_code', '')
+    old_xmltv = config.get('epg', 'xmltv', '') or ''
     c.setdefault('hdhr', {})['ip_address'] = ip
     epg = c.setdefault('epg', {})
     epg['zip_code'] = zip_code
+    if 'xmltv' in data:
+        epg['xmltv'] = str(data.get('xmltv') or '').strip()
     if zip_code != old_zip:
         epg['headend_id'] = ''          # re-derived from the ZIP
     tz = str(data.get('timezone', '')).strip()
@@ -5395,6 +5537,21 @@ def api_setup_save():
     c.setdefault('guide', {})['distant_channels'] = [str(m) for m in data.get('distant_channels', []) if str(m).isdigit()]
     if 'hidden_channels' in data:
         c['guide']['hidden_channels'] = [str(n) for n in data['hidden_channels'] if str(n).strip()]
+    if isinstance(data.get('iptv'), list):
+        old = {s.get('m3u'): s for s in c.get('iptv') or [] if isinstance(s, dict)}
+        sources = []
+        rows = [r for r in data['iptv'] if isinstance(r, dict) and str(r.get('m3u') or '').strip()]
+        for i, row in enumerate(rows):
+            m3u = str(row['m3u']).strip()
+            source = dict(old.get(m3u, {}))  # keeps settings only config.json has (groups)
+            source.update(name=str(row.get('name') or '').strip() or f"IPTV {i + 1}", m3u=m3u,
+                          max_streams=max(1, min(20, int(row.get('max_streams') or 1))),
+                          xmltv=str(row.get('xmltv') or '').strip())
+            sources.append(source)
+        names = [s['name'] for s in sources]
+        if len(set(names)) != len(names):
+            return jsonify({'error': 'Give each IPTV playlist a different name'}), 400
+        c['iptv'] = sources
     for section, keys in (('jellyfin', ('url', 'api_key', 'recordings_path')), ('jellyseerr', ('url', 'api_key')),
                           ('sonarr', ('url', 'api_key')), ('mqtt', ('host', 'port', 'username', 'password'))):
         values = data.get(section) or {}
@@ -5403,8 +5560,8 @@ def api_setup_save():
             if k in values:
                 target[k] = int(values[k] or 1883) if k == 'port' else str(values[k] or '').strip()
     config.save_config()
-    if zip_code != old_zip:
-        # A different market: drop the cached guide so the new one is fetched
+    if zip_code != old_zip or (epg.get('xmltv') or '') != old_xmltv:
+        # A different market or guide source: drop the cached guide so the new one is fetched
         EPG_CACHE['data'] = None
         EPG_CACHE['timestamp'] = 0
         try:
@@ -5441,22 +5598,17 @@ def _restart_soon():
 
 @app.route('/debug/refresh_epg', methods=['POST','GET'])
 def refresh_epg_manual():
-    """Manual EPG refresh endpoint. Clears cache and fetches fresh data immediately.
-
-    Query param: days (default 7) to expand horizon for this one-shot fetch.
-    """
+    """Fetch the guide now (every source: Gracenote, XMLTV, IPTV and SiliconDust), as the
+    refresh loop would"""
     try:
-        days = int(request.args.get('days','7'))
-    except Exception:
-        days = 7
-    try:
-        print(f"EPG: manual refresh requested (days={days})")
-        fresh = fetch_zap2it_epg(days=days)
-        EPG_CACHE['data'] = fresh
-        EPG_CACHE['timestamp'] = time.time()
-        return jsonify({'status':'ok','program_count': len(fresh)})
+        print("EPG: manual refresh requested")
+        with _EPG_LOCK:
+            EPG_CACHE['timestamp'] = EPG_CACHE['last_attempt'] = 0
+            EPG_CACHE['sd_timestamp'] = EPG_CACHE['sd_attempt'] = 0
+            fresh = _get_epg_locked()
+        return jsonify({'status': 'ok', 'program_count': len(fresh)})
     except Exception as e:
-        return jsonify({'status':'error','error': str(e)}), 500
+        return jsonify({'status': 'error', 'error': str(e)}), 500
 
 def _extract_opponent(team_token:str, title:str):
     import re
@@ -5849,6 +6001,8 @@ def mqtt_state():
     upcoming = [u for u in upcoming_recordings() if not u['airing'] and not u.get('skip') and not u.get('watch') and u['start'] is not None]
     nxt = upcoming[0] if upcoming else None
     tuners = tuner_details()
+    if tuners is not None:
+        tuners = [t for t in tuners if not iptv.is_iptv(t['box'])]  # HA's tuners are the antenna's
     failure = RECORDING_FAILURES[-1] if RECORDING_FAILURES else None
     if failure and now - datetime.fromisoformat(failure['at']) > timedelta(hours=12):
         failure = None
@@ -5895,7 +6049,7 @@ def start_mqtt():
     except ImportError:
         print("[MQTT] paho-mqtt isn't installed; Home Assistant integration is off (pip install paho-mqtt)")
         return
-    tuners = tuner_details() or []
+    tuners = [t for t in tuner_details() or [] if not iptv.is_iptv(t['box'])]
     MQTT_BRIDGE = MqttBridge(cfg, mqtt_state, mqtt_command, tuner_count=len(tuners) or 2, version=__version__)
     MQTT_BRIDGE.start()
     print(f"[MQTT] Home Assistant integration on ({cfg['host']}:{cfg.get('port', 1883)})")

@@ -5,6 +5,18 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.0] - 2026-10-24
+
+### Added
+- XMLTV guide import (Settings → TV guide → **XMLTV guide**, `epg.xmltv`): a URL or a file (`.xml` or `.xml.gz`) for channels the ZIP code doesn't cover, so outside the US and Canada (a UK Freeview guide, say) the guide reaches a week ahead instead of SiliconDust's day. Its channels are matched to the tuner's by channel number or LCN, then by name; **Test** says how many matched, and `epg.xmltv_channels` maps the rest. A feed that never marks new episodes or repeats leaves "new episodes only" alone rather than treating everything as a rerun.
+- IPTV (Settings → Integrations → **IPTV**, `iptv`): M3U playlists whose channels join the guide and record, play live and follow series like antenna channels. Each playlist is a source with as many "tuners" as the provider allows streams at once (`max_streams`), and its guide is the playlist's XMLTV (`url-tvg`) or one you give, matched by `tvg-id`. Channels keep the playlist's `tvg-chno` when it's free, otherwise 1001, 1002…; `groups` keeps only some of a big playlist.
+
+- A **Support LineDrive** link (Ko-fi) in the footer, the README and the GitHub page. LineDrive stays free.
+
+### Changed
+- Clash warnings know which tuners can record which channels: an IPTV stream never counts as an antenna tuner, and HDHomeRuns on different antennas only count for the channels they get.
+- `/debug/refresh_epg` refreshes every guide source, not just Gracenote.
+
 ## [4.1.0] - 2026-10-24
 
 ### Added

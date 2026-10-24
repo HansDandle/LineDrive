@@ -74,6 +74,14 @@
                     <p class="field-note" data-result="zip">With a US ZIP or Canadian postal code you get a week of Gracenote's over-the-air listings, including stations from across the border if your area gets them. If your antenna reaches a city that isn't in your lineup, add that city's code too, separated by a comma (e.g. <code>L2E 6S4, 14201</code>); Test shows which of your channels still have no listings. The guide also uses SiliconDust's listings for your tuner, which add artwork and better rerun detection. Elsewhere, leave this empty: SiliconDust's guide on its own covers about a day ahead.</p>
                 </div>
                 <div class="field">
+                    <label for="xmltv">XMLTV guide <span class="muted">(optional)</span></label>
+                    <div class="inline">
+                        <input type="text" id="xmltv" value="{{ settings.xmltv }}" placeholder="https://… or /config/guide.xml" />
+                        <button type="button" class="btn test-btn" data-kind="xmltv">Test</button>
+                    </div>
+                    <p class="field-note" data-result="xmltv">A week of listings from an XMLTV provider, for channels the ZIP code doesn't cover: outside the US and Canada (a UK Freeview guide, say), or for IPTV channels. A URL, or a file in the config folder (.xml or .xml.gz). Channels are matched by number or name; Test shows which of yours it found.</p>
+                </div>
+                <div class="field">
                     <label for="timezone">Time zone</label>
                     <select id="timezone" data-value="{{ settings.timezone }}">
                         <option value="">This computer's time zone</option>
@@ -169,6 +177,23 @@
                     <p class="field-note">After an episode records, LineDrive unmonitors it in Sonarr so Sonarr doesn’t download it too. Nothing else in Sonarr changes, and it doesn’t need to see your recordings folder.</p>
                 </details>
 
+                <details class="integration" {% if settings.iptv %}open{% endif %}>
+                    <summary>IPTV <span class="muted small">record channels from M3U playlists too</span></summary>
+                    <p class="field-note">Each playlist's channels join the guide and can be recorded and watched like antenna channels. <strong>At once</strong> is how many channels your provider lets you stream together (LineDrive treats each as a tuner). The guide comes from the playlist's own XMLTV link if it has one, or the XMLTV address you give. To add another playlist, save, and a new empty row appears.</p>
+                    {% for source in settings.iptv + [{}] %}
+                    <div class="iptv-row">
+                        <div class="field-row">
+                            <div class="field"><label>Name</label><input type="text" data-k="name" value="{{ source.name or '' }}" placeholder="My provider" /></div>
+                            <div class="field"><label>At once</label><input type="number" data-k="max_streams" min="1" max="20" value="{{ source.max_streams or 1 }}" /></div>
+                        </div>
+                        <div class="field"><label>M3U playlist</label><input type="text" data-k="m3u" value="{{ source.m3u or '' }}" placeholder="https://… or /config/playlist.m3u" /></div>
+                        <div class="field"><label>XMLTV guide <span class="muted">(optional)</span></label><input type="text" data-k="xmltv" value="{{ source.xmltv or '' }}" placeholder="From the playlist if empty" /></div>
+                        <button type="button" class="btn btn-sm iptv-test">Test playlist</button>
+                        <p class="field-note iptv-result"></p>
+                    </div>
+                    {% endfor %}
+                </details>
+
                 <details class="integration" {% if settings.mqtt.host %}open{% endif %}>
                     <summary>Home Assistant (MQTT) <span class="muted small">sensors and buttons appear automatically</span></summary>
                     <div class="field-row">
@@ -190,7 +215,7 @@
     </main>
 
     <footer class="footer">
-        <p>LineDrive {{ version }} · <a href="https://github.com/HansDandle/LineDrive/blob/main/CHANGELOG.md" target="_blank" rel="noopener">What's new</a></p>
+        <p>LineDrive {{ version }} · <a href="https://github.com/HansDandle/LineDrive/blob/main/CHANGELOG.md" target="_blank" rel="noopener">What's new</a> · <a href="https://ko-fi.com/hansdandle" target="_blank" rel="noopener">Support LineDrive</a></p>
     </footer>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

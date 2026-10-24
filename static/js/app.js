@@ -138,8 +138,9 @@
     }
     list.replaceChildren(...down.map((ip) => el('li', { class: 'tuner warn', text: 'Can’t reach the HDHomeRun at ' + ip })),
                          ...tuners.map((t) => {
-      // With several boxes, say which one each tuner is on
-      const label = 'Tuner ' + (t.index + 1) + (boxes > 1 ? ' (box ' + t.box_number + ')' : '') + ': ';
+      // With several boxes, say which one each tuner is on; an IPTV source's "tuners" are its streams
+      const label = t.box.startsWith('iptv:') ? t.box.slice(5) + ' stream ' + (t.box_index + 1) + ': '
+        : 'Tuner ' + (t.index + 1) + (boxes > 1 ? ' (box ' + t.box_number + ')' : '') + ': ';
       if (!t.in_use) return el('li', { class: 'tuner' }, label, el('span', { class: 'tuner-free', text: 'free' }));
       const who = t.live ? 'LineDrive live TV' : t.ours ? 'LineDrive' : (t.target_ip === thisPc ? 'another app on this PC' : 'another device (' + t.target_ip + ')');
       const item = el('li', { class: 'tuner' + (t.ours ? '' : ' other') },

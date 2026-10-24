@@ -300,7 +300,7 @@
     const s = ch.signal;
     box.replaceChildren();
     box.classList.toggle('weak', !!(s && s.weak));
-    let text = s ? signalText(s) : 'Signal not checked yet';
+    let text = ch.iptv ? 'IPTV channel' : s ? signalText(s) : 'Signal not checked yet';
     if (s && s.weak) text += ' — recordings may break up';
     if (s && s.at) text += ' · ' + ago(s.at);
     box.append(document.createTextNode(text));
@@ -334,7 +334,8 @@
         toast(err.message, true);
       }
     });
-    box.append(check, hide);
+    if (ch.iptv) box.append(hide);  // no antenna signal to check
+    else box.append(check, hide);
   }
 
   function ago(iso) {

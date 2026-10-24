@@ -12,7 +12,9 @@
     "headend_id": "",
     "timezone": "",
     "refresh_interval": 24,
-    "comment": "zip_code picks your over-the-air guide: a US ZIP or a Canadian postal code, or several separated by commas (for an antenna that reaches another market; where lineups overlap, the first code wins). Leave headend_id empty (it becomes USA-OTA<zip>-DEFAULT or CAN-OTA<postal code>-DEFAULT). Leave timezone empty to use this machine's (in Docker, the TZ variable). refresh_interval is in hours."
+    "xmltv": "",
+    "xmltv_channels": {},
+    "comment": "zip_code picks your over-the-air guide: a US ZIP or a Canadian postal code, or several separated by commas (for an antenna that reaches another market; where lineups overlap, the first code wins). Leave headend_id empty (it becomes USA-OTA<zip>-DEFAULT or CAN-OTA<postal code>-DEFAULT). Leave timezone empty to use this machine's (in Docker, the TZ variable). refresh_interval is in hours. xmltv: an XMLTV guide (URL, or a file such as /config/guide.xml.gz) for channels the ZIP code doesn't cover, e.g. outside the US and Canada; its channels are matched to yours by number or name, and xmltv_channels maps the rest ({\"BBCOne.uk\": \"1\"})."
   },
   "directories": {
     "recordings": "~/TV_Recordings",
@@ -59,6 +61,8 @@
     "api_key": "",
     "comment": "Optional. After an episode records, LineDrive unmonitors it in Sonarr so Sonarr doesn't download it too. Only the episode's monitored flag changes; movies and sports are skipped."
   },
+  "iptv": [],
+  "iptv_comment": "Optional IPTV playlists: [{\"name\": \"My provider\", \"m3u\": \"https://...\", \"max_streams\": 1, \"xmltv\": \"\", \"groups\": []}]. max_streams: channels the provider allows at once (each counts as a tuner). xmltv: the guide, if the playlist has no url-tvg. groups: only these group-title values.",
   "mqtt": {
     "host": "",
     "port": 1883,

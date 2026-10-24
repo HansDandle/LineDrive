@@ -16,11 +16,6 @@ per-series priorities decide which one loses, instead of the one scheduled first
 worth it if real clashes turn out to be common; 4.1 already offers another airing where there is
 one.
 
-### Per-box channel lineups in clash warnings
-Clash warnings count every box's tuners together, which is right when the boxes share an antenna.
-Boxes on different antennas (different channels) can still clash on a channel only one of them
-carries.
-
 ## Smaller items for any release
 
 - **Skip episodes already in Jellyfin.** Before recording, ask Jellyfin whether that episode is in

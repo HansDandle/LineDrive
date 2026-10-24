@@ -298,7 +298,7 @@
   function values() {
     const v = (id) => ($(id) ? $(id).value.trim() : '');
     return {
-      hdhr_ip: v('hdhrIp'), zip_code: v('zipCode'), timezone: tzSelect.value, recordings: v('recordings'),
+      hdhr_ip: v('hdhrIp'), zip_code: v('zipCode'), xmltv: v('xmltv'), timezone: tzSelect.value, recordings: v('recordings'),
       quality: v('quality'), encoder: v('encoder'),
       captions: $('captions').checked, nfo: $('nfo').checked, comskip: $('comskip').checked,
       comskip_mode: document.querySelector('input[name="comskipMode"]:checked') ? document.querySelector('input[name="comskipMode"]:checked').value : undefined,
@@ -308,16 +308,47 @@
       jellyfin: { url: v('jfUrl'), api_key: v('jfKey'), recordings_path: v('jfPath') },
       jellyseerr: { url: v('jsUrl'), api_key: v('jsKey') },
       sonarr: { url: v('soUrl'), api_key: v('soKey') },
+      iptv: iptvRows().filter((r) => r.m3u),
       mqtt: { host: v('mqHost'), port: v('mqPort'), username: v('mqUser'), password: v('mqPass') },
     };
   }
+
+  // IPTV playlists: one row each, plus an empty one for adding
+  function iptvRows() {
+    return Array.from(document.querySelectorAll('.iptv-row')).map((row) => {
+      const out = {};
+      row.querySelectorAll('[data-k]').forEach((input) => { out[input.dataset.k] = input.value.trim(); });
+      out.max_streams = parseInt(out.max_streams, 10) || 1;
+      return out;
+    });
+  }
+
+  document.querySelectorAll('.iptv-row').forEach((row, i) => {
+    const btn = row.querySelector('.iptv-test');
+    const out = row.querySelector('.iptv-result');
+    btn.addEventListener('click', async () => {
+      out.textContent = 'Testing…';
+      out.className = 'field-note iptv-result';
+      btn.disabled = true;
+      try {
+        const r = await postJSON('/api/setup/test', Object.assign({ kind: 'iptv' }, iptvRows()[i]));
+        out.textContent = (r.ok ? '✓ ' : '') + r.message;
+        out.className = 'field-note iptv-result ' + (r.ok ? 'ok' : 'bad');
+      } catch (e) {
+        out.textContent = e.message;
+        out.className = 'field-note iptv-result bad';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
 
   document.querySelectorAll('.test-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const kind = btn.dataset.kind;
       const out = document.querySelector('[data-result="' + kind + '"]');
       const all = values();
-      const body = kind === 'zip' ? { zip_code: all.zip_code }
+      const body = kind === 'zip' ? { zip_code: all.zip_code } : kind === 'xmltv' ? { xmltv: all.xmltv }
         : kind === 'encoder' ? { encoder: all.encoder } : all[kind];
       out.textContent = 'Testing…';
       out.className = 'field-note';

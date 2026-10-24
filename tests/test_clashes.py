@@ -63,6 +63,7 @@ def test_series_rules_expand_by_weekday(dvr):
 
 def test_scheduling_warns_and_badges_but_still_schedules(dvr, monkeypatch):
     monkeypatch.setattr(dvr, "TUNER_COUNT", 2)
+    monkeypatch.setattr(dvr, "BOX_TUNERS", {})
     monkeypatch.setitem(dvr.EPG_CACHE, "data", [])
     monkeypatch.setitem(dvr.channels, "5.1", "KTBC")
     day = (datetime.now() + timedelta(days=2)).replace(hour=20, minute=0, second=0, microsecond=0)
@@ -93,6 +94,7 @@ def test_scheduling_warns_and_badges_but_still_schedules(dvr, monkeypatch):
 
 def test_no_clash_no_warning(dvr, monkeypatch):
     monkeypatch.setattr(dvr, "TUNER_COUNT", 2)
+    monkeypatch.setattr(dvr, "BOX_TUNERS", {})
     monkeypatch.setitem(dvr.EPG_CACHE, "data", [])
     monkeypatch.setitem(dvr.channels, "5.1", "KTBC")
     dvr.scheduled_jobs[:] = []
@@ -104,6 +106,20 @@ def test_no_clash_no_warning(dvr, monkeypatch):
     finally:
         dvr.scheduled_jobs[:] = []
         dvr.clashes_changed()
+
+
+def test_tuners_only_count_for_the_channels_their_box_carries(dvr):
+    # Two HDHomeRun tuners and one IPTV stream: three antenna shows at once don't all fit,
+    # even though there are three "tuners"
+    pools = {"192.168.1.50": 2, "iptv:Provider": 1}
+    carriers = {"5.1": ["192.168.1.50"], "7.1": ["192.168.1.50"], "1001": ["iptv:Provider"]}
+    jobs = [once("A", "2026-10-01", "20:00"), once("B", "2026-10-01", "20:00", channel_number="7.1"),
+            once("C", "2026-10-01", "20:00"), once("Stream", "2026-10-01", "20:00", channel_number="1001")]
+    lost = dvr.find_clashes(dvr.planned_airings(jobs, NOW), [], pools, carriers)
+    assert [(j["title"], held) for _, _, j, held in lost] == [("C", ["A", "B"])]
+    # A recording already running on the IPTV source doesn't hold an antenna tuner
+    busy = [(NOW + timedelta(hours=9), "Earlier stream", "iptv:Provider")]
+    assert [j["title"] for _, _, j, _ in dvr.find_clashes(dvr.planned_airings(jobs[:2], NOW), busy, pools, carriers)] == []
 
 
 def test_sports_padding_holds_the_tuner(dvr, monkeypatch):
@@ -129,6 +145,7 @@ def test_clash_offers_another_airing_and_moves_it(dvr, monkeypatch):
            _listing("Elsbeth", "24.2", late, "01:00 AM"),                       # the same episode later
            _listing("Elsbeth", "7.1", late, "02:00 AM", episode="8", episode_title="Another")]  # a different one
     monkeypatch.setattr(dvr, "TUNER_COUNT", 2)
+    monkeypatch.setattr(dvr, "BOX_TUNERS", {})
     monkeypatch.setattr(dvr, "visible_epg", lambda: epg)
     monkeypatch.setattr(dvr, "channels", {"5.1": "KTBC", "24.2": "KVUE2", "7.1": "KXAN"})
     monkeypatch.setattr(dvr, "save_metadata_file", lambda info, name: None)
@@ -162,6 +179,7 @@ def test_a_series_skips_just_the_moved_airing(dvr, monkeypatch):
     epg = [_listing("Jeopardy!", "5.1", day, "08:00 PM"),
            _listing("Jeopardy!", "5.2", day, "11:00 PM")]
     monkeypatch.setattr(dvr, "TUNER_COUNT", 2)
+    monkeypatch.setattr(dvr, "BOX_TUNERS", {})
     monkeypatch.setattr(dvr, "visible_epg", lambda: epg)
     monkeypatch.setattr(dvr, "program_on_air", lambda ch, when: next(
         (p for p in epg if p["channel_number"] == str(ch) and dvr._program_start(p) == when), None))
