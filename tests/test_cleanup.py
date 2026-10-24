@@ -99,8 +99,9 @@ def test_keep_setting_endpoint_and_upcoming(dvr, monkeypatch):
 
 def test_watch_in_vlc(dvr, monkeypatch):
     monkeypatch.setitem(dvr.channels, "24.1", "KVUE")
-    monkeypatch.setattr(dvr, "HDHR_IP", "192.168.1.50")
-    monkeypatch.setattr(dvr, "no_tuner_message", lambda: None)
+    monkeypatch.setattr(dvr, "HDHR_IPS", ["192.168.1.50"])
+    monkeypatch.setattr(dvr, "CHANNEL_BOXES", {"24.1": ["192.168.1.50"]})
+    monkeypatch.setattr(dvr, "no_tuner_message", lambda channel=None: None)
     client = dvr.app.test_client()
     data = client.get("/api/watch/24.1").get_json()
     assert data["url"] == "http://192.168.1.50:5004/auto/v24.1"
@@ -109,6 +110,6 @@ def test_watch_in_vlc(dvr, monkeypatch):
     assert playlist.get_data(as_text=True).splitlines() == [
         "#EXTM3U", "#EXTINF:-1,24.1 KVUE", "http://192.168.1.50:5004/auto/v24.1"]
     assert client.get("/api/watch/99.9").status_code == 404
-    monkeypatch.setattr(dvr, "no_tuner_message", lambda: "Both tuners are in use (5.1, 7.1). Stop one of those to record this.")
+    monkeypatch.setattr(dvr, "no_tuner_message", lambda channel=None: "Both tuners are in use (5.1, 7.1). Stop one of those to record this.")
     busy = client.get("/api/watch/24.1")
     assert busy.status_code == 409 and "to watch this" in busy.get_json()["error"]

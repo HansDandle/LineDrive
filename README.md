@@ -25,6 +25,7 @@ plain-English questions ("when's the next basketball game?"), and recordings you
   - "record Abbott Elementary when it comes back" (it watches the guide and starts recording when the new season shows up)
 - **Series that don't waste tuners.** "New episodes only" follows each first-run episode wherever it airs (preemptions, sister stations), skips reruns, and skips episodes you already have.
 - **Recordings your media server understands.** `TV/<Show>/Season 52/Show - S52E01 - Episode Title.mp4` (or air-date names), `Movies/<Title (Year)>/`, plus a `.nfo` with the plot and air date and a `.srt` of the broadcast's closed captions (either can be turned off in Settings). Jellyfin, Emby, Kodi and Plex pick them up with proper titles and subtitles.
+- **Live TV in the guide.** Watch anything that's on now in a player beside the guide, with picture-in-picture and full screen, or hand the stream to VLC.
 - **Ad breaks marked or cut (optional).** Comskip finds the commercials. LineDrive either adds them as chapters, so Jellyfin (with its Chapter Segments plugin) and Kodi can skip them, or cuts them out for Plex and everything else, keeping the uncut original for a week in case a cut was wrong.
 - **Tuner-aware.** Warns when you schedule more recordings at once than you have tuners, and badges the one that won't get a tuner until you sort it out. Refuses to "record" when every tuner is busy (and tells you who has them), reports failed recordings, and has a **kill switch** for streams other apps leave open (hello, Jellyfin live TV).
 - **Integrations (all optional):**
@@ -40,7 +41,7 @@ plain-English questions ("when's the next basketball game?"), and recordings you
 ## Compatibility
 
 - **Any number of tuners.** LineDrive reads the tuner count from the device: DUO, QUATRO, FLEX 4K, SCRIBE and so on. Each recording takes whichever tuner is free.
-- **One HDHomeRun at a time** for now. Several devices on one network aren't combined yet.
+- **Several HDHomeRuns** are pooled: list each one's address (Settings finds them) and their tuners work as one set. Each recording goes to a box that has the channel and a free tuner, and moves to the next box if another app took the last one first.
 - **ATSC 1.0 channels** are what it's tested on. On ATSC 3.0 (NextGen TV) tuners such as the FLEX 4K, DRM-protected 3.0 stations can't be recorded by any third-party app, and unencrypted 3.0 stations are untested (their AC-4 audio may not decode in FFmpeg). The ATSC 1.0 simulcasts of the same stations work normally.
 
 ## Quick start (Docker)
@@ -109,7 +110,7 @@ Then open `http://localhost:5050` and follow the setup page.
 
 **Keep or delete.** Each series in **Upcoming** has a menu for what to keep: everything (the default), the newest 1, 3, 5 or 10 episodes, delete after a week, two weeks or 30 days, or, with Jellyfin connected, delete once watched (right away, after 2 days or after a week). LineDrive only ever removes recordings it made for that series: it keeps a list of them, so downloads and your own files in the same folders are never touched. Removed recordings (with their `.srt` and `.nfo`) go to a `.deleted` folder in your recordings for 7 days before they're gone for good; move one back to restore it. An episode a rule removed still counts as one you have, so a rerun doesn't record it again. Cancelling a series keeps everything it recorded.
 
-**Watch live in VLC.** Open anything that's on now in the guide and choose **Watch in VLC**. Phones and tablets open it in the VLC app; on a computer you get a small playlist file to open with VLC. The picture comes straight from the tuner, unconverted, and closing VLC frees the tuner.
+**Watch live.** Open anything that's on now in the guide and choose **Watch here**: a player docks in the corner and stays while you browse, with picture-in-picture and full screen. Browsers can't play the broadcast as it comes from the tuner, so LineDrive converts it to 720p as it airs (about one CPU core per viewer, or the graphics card chosen for recordings); it starts in about 10 seconds. Each viewer holds a tuner, so closing the player or the page frees it, a scheduled recording takes the tuner back when none is free (the player says so), and at most two people can watch at once (`live.max_viewers`). Or choose **Watch in VLC**: phones and tablets open it in the VLC app, and on a computer you get a small playlist file to open with VLC. That picture comes straight from the tuner, unconverted, and closing VLC frees the tuner.
 
 **Reliability details:** a recording that follows live sports on the same channel gets 30 extra minutes, because games run long and push everything after them back (`recording.sports_overrun_minutes`); a recording starts even if LineDrive was briefly late (within 5 minutes), two copies of LineDrive can't both run the same schedule, clashing file names get ` (2)` instead of overwriting, and a recording that can't get a tuner shows up on the status card (and in Home Assistant) instead of failing silently.
 
@@ -119,7 +120,7 @@ Everything is on the **Settings** page (gear icon). It writes `config.json` in t
 
 | Setting | Notes |
 |---|---|
-| HDHomeRun | Found automatically, or type its IP. |
+| HDHomeRun | Found automatically, or type its IP. With several, click each one or list their addresses separated by commas. |
 | ZIP or postal code | US ZIP or Canadian postal code: a week of Gracenote listings. Several, comma-separated, for an antenna that reaches another market. Leave empty elsewhere (SiliconDust's guide, about a day ahead). |
 | Recording quality | Best / Standard / Smaller / 720p / Original. |
 | Encode with | CPU (default), NVIDIA, Intel Quick Sync or VAAPI. See [Graphics card encoding](#graphics-card-encoding). |
@@ -178,7 +179,7 @@ With MQTT set up, LineDrive shows up as a device:
 
 ## Troubleshooting
 
-- **"All tuners are in use."** Another app (Jellyfin/Plex live TV, the HDHomeRun app, Channels) has them. The status card shows what's on each tuner; **Free up** releases one another app left open. In Jellyfin, setting the tuner's simultaneous-stream limit to 1 keeps a tuner free for LineDrive.
+- **"All tuners are in use."** Another app (Jellyfin/Plex live TV, the HDHomeRun app, Channels) has them, or someone is watching live TV in LineDrive (a recording takes that tuner back on its own). The status card shows what's on each tuner; **Free up** releases one another app left open. In Jellyfin, setting the tuner's simultaneous-stream limit to 1 keeps a tuner free for LineDrive.
 - **Guide is empty.** Check the ZIP or postal code with **Test** in Settings. Outside the US and Canada, leave it empty.
 - **Times are off by an hour or more.** In Docker, set `TZ`. Otherwise leave Time zone on "this computer's".
 - **Can't reach `http://<this PC's IP>:5050` from the same Windows PC** (other devices work): that's Docker Desktop with WSL "mirrored" networking. Use `http://localhost:5050` on that PC, or add `hostAddressLoopback=true` under `[experimental]` in `%UserProfile%\.wslconfig`.
@@ -207,6 +208,8 @@ The tests use a fixed week of real listings (`tests/fixtures/guide_sample.json`)
 | `sonarr.py` | Sonarr handoff (unmonitor recorded episodes) |
 | `comskip.py`, `comskip.ini` | commercial marking (chapters + .edl) |
 | `encoders.py` | CPU and graphics card video encoders, with tests and fallback |
+| `tuners.py` | several HDHomeRun boxes as one pool of tuners |
+| `live.py` | live TV for the guide's player (HLS) |
 | `mqtt_bridge.py` | Home Assistant integration |
 
 ## Legal

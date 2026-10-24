@@ -1,7 +1,11 @@
 {
   "hdhr": {
     "ip_address": "",
-    "comment": "Your HDHomeRun's IP address (the Settings page can find it)"
+    "comment": "Your HDHomeRun's IP address (the Settings page can find it). Several boxes: separate their addresses with commas and their tuners are pooled."
+  },
+  "live": {
+    "max_viewers": 2,
+    "comment": "Live TV in the guide: how many people can watch at once. Each viewer holds a tuner and converts the broadcast as it airs (about one CPU core each)."
   },
   "epg": {
     "zip_code": "",

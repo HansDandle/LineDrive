@@ -31,6 +31,19 @@
         <div id="status" class="status">Loading guide…</div>
     </main>
 
+    <section id="player" class="player" aria-label="Live TV" hidden>
+        <div class="player-bar">
+            <span id="playerTitle" class="player-title"></span>
+            <button id="playerPip" class="player-btn" type="button" title="Picture in picture" aria-label="Picture in picture">⧉</button>
+            <button id="playerFull" class="player-btn" type="button" title="Full screen" aria-label="Full screen">⛶</button>
+            <button id="playerClose" class="player-btn" type="button" title="Stop watching" aria-label="Stop watching">×</button>
+        </div>
+        <div id="playerScreen" class="player-screen">
+            <video id="playerVideo" playsinline controls></video>
+            <p id="playerMsg" class="player-msg"></p>
+        </div>
+    </section>
+
     <aside id="panel" class="panel" aria-hidden="true">
         <button id="panelClose" class="panel-close" type="button" aria-label="Close">×</button>
         <div class="panel-body">
@@ -49,6 +62,7 @@
     <div id="scrim" class="scrim"></div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+    <script src="/static/vendor/hls.min.js"></script>
     <script src="/static/js/guide.js?v={{ cache_bust }}"></script>
 </body>
 </html>

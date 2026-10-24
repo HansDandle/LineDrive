@@ -333,7 +333,7 @@ def run_schedule_loop():
                     late = int((now_dt - slot).total_seconds() // 60)
                     late_note = f" ({late} min late)" if late else ""
                     print(f"[Scheduler] Starting '{job.get('title')}' on {ch_num} for {dur_min} min (job #{job.get('id')}){late_note}")
-                    busy = no_tuner_message()
+                    busy = make_room(ch_num, job.get('title'))
                     if busy:
                         # Still try: a tuner may free up between the check and the request. If
                         # ffmpeg can't get one, record_channel reports the failure on the status card.
@@ -491,7 +491,9 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template, request, jsonify, Response
 from epg_zap2it import fetch_zap2it_epg
 # --- Global config variables ---
-HDHR_IP = config.get_hdhr_ip()
+import tuners as tuner_pool
+HDHR_IPS = tuner_pool.parse_addresses(config.get_hdhr_ip())  # one or more HDHomeRun boxes
+HDHR_IP = HDHR_IPS[0] if HDHR_IPS else ''  # the first, for anything that needs just one
 SAVE_DIR = str(config.get_recording_dir())
 FFMPEG_PATH = config.get_ffmpeg_path()
 # LineDrive's own files (schedule, guide cache) live beside config.json, not among the recordings
@@ -630,7 +632,15 @@ def _get_epg_locked():
     if now - EPG_CACHE.get("sd_timestamp", 0) > SD_GUIDE_TTL and now - EPG_CACHE.get("sd_attempt", 0) > 600:
         EPG_CACHE["sd_attempt"] = now
         try:
-            sd = parse_hdhomerun_guide(fetch_hdhomerun_guide(HDHR_IP))
+            raw = fetch_hdhomerun_guide(HDHR_IP)
+            # Another box's guide only for channels the first box doesn't have
+            have = {str(ch.get('GuideNumber')) for ch in raw}
+            for ip in HDHR_IPS[1:]:
+                if any(ip in boxes for num, boxes in CHANNEL_BOXES.items() if num not in have):
+                    extra = [ch for ch in fetch_hdhomerun_guide(ip) if str(ch.get('GuideNumber')) not in have]
+                    raw += extra
+                    have |= {str(ch.get('GuideNumber')) for ch in extra}
+            sd = parse_hdhomerun_guide(raw)
         except Exception as e:
             print(f"EPG: SiliconDust guide failed: {e}")
             sd = []
@@ -723,29 +733,26 @@ t = time
 
 # === FUNCTIONS ===
 
-def get_hdhr_channels(ip):
-    if not ip:
-        return {}  # not set up yet
-    url = f"http://{ip}/lineup.json"
+def _fetch_lineup(ip):
     try:
-        r = requests.get(url, timeout=5)
+        r = requests.get(f"http://{ip}/lineup.json", timeout=5)
         r.raise_for_status()
-        lineup = r.json()
-        channels_dict = {}
-        for ch in lineup:
-            vch = ch.get("GuideNumber")
-            name = ch.get("GuideName")
-            if vch and name:
-                channels_dict[vch] = name
-        return channels_dict
+        return r.json()
     except Exception as e:
-        print(f"Error fetching channel lineup: {e}")
-        return {}  # No channels available
+        print(f"Error fetching channel lineup from {ip}: {e}")
+        return None
 
-channels = get_hdhr_channels(HDHR_IP)
+def get_hdhr_channels(ips):
+    """({channel number: name}, {channel number: [boxes carrying it]}) across every box"""
+    return tuner_pool.merge_lineups([(ip, _fetch_lineup(ip)) for ip in ips])
+
+channels, CHANNEL_BOXES = get_hdhr_channels(HDHR_IPS)
 days_list = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
-TUNER_COUNT = None  # from the device; remembered so a moment it doesn't answer doesn't hide clashes
+TUNER_COUNT = None  # from the devices; remembered so a moment they don't answer doesn't hide clashes
+BOX_TUNERS = {}  # box -> tuner count last seen, so tuner numbers stay put while a box is down
+BOXES_DOWN = []  # boxes that didn't answer the last status check
+LIVE = None  # live TV viewers (live.LiveTV), set up with the routes below
 ACTIVE_RECORDINGS = {}  # filename -> info about recordings in progress (for the status display)
 RESTARTING = False  # set while settings are applied by restarting; recordings stopped for it get resumed
 RECORDING_FAILURES = []  # recent recordings that couldn't start or died, newest last (for the status display)
@@ -835,43 +842,52 @@ def _explain_ffmpeg_failure(tail):
         return 'The recordings drive is full'
     return (tail[-1] if tail else 'ffmpeg exited with an error')[:160]
 
-def tuner_details():
-    """Each tuner: {index, channel_number, channel_name, target_ip, in_use, ours}, or None if unreachable.
-    ours = LineDrive is recording that channel; otherwise another app/device holds it."""
+def _box_status(ip):
     try:
-        status = requests.get(f"http://{HDHR_IP}/status.json", timeout=3).json()
+        return requests.get(f"http://{ip}/status.json", timeout=3).json()
     except Exception:
         return None
-    global TUNER_COUNT
-    ours = {rec['channel_number'] for rec in ACTIVE_RECORDINGS.values()}
-    tuners = []
-    for s in status:
-        res = s.get('Resource', '')
-        if not res.startswith('tuner'):
-            continue
-        in_use = bool(s.get('VctNumber') or s.get('TargetIP'))
-        tuners.append({
-            'index': int(res[5:] or 0),
-            'channel_number': s.get('VctNumber') or '',
-            'channel_name': s.get('VctName') or '',
-            'target_ip': s.get('TargetIP') or '',
-            'in_use': in_use,
-            'ours': in_use and s.get('VctNumber') in ours,
-        })
-    TUNER_COUNT = len(tuners) or TUNER_COUNT
+
+def tuner_details():
+    """Each tuner on every box: {index, box, box_number, box_index, channel_number, channel_name,
+    target_ip, in_use, ours}, or None if no box answers. ours = LineDrive is recording that
+    channel on that box; otherwise another app/device holds it."""
+    global TUNER_COUNT, BOXES_DOWN
+    ours = {(rec.get('box') or HDHR_IP, rec['channel_number']) for rec in list(ACTIVE_RECORDINGS.values())}
+    statuses = [(ip, _box_status(ip)) for ip in HDHR_IPS]
+    tuners, BOXES_DOWN = tuner_pool.combine_status(statuses, BOX_TUNERS, ours, LIVE.holding() if LIVE else ())
+    TUNER_COUNT = sum(BOX_TUNERS.values()) or TUNER_COUNT
     return tuners
 
-def tuner_usage():
-    """(free tuner count, ['24.1 KVUE-DT', ...] in use), or (None, []) if the tuner can't be asked"""
+def tuner_usage(channel=None):
+    """(free tuner count, ['24.1 KVUE-DT', ...] in use), or (None, []) if the tuners can't be asked.
+    With a channel, only the boxes that carry it count."""
     tuners = tuner_details()
     if tuners is None:
         return None, []
-    busy = [f"{t['channel_number']} {t['channel_name']}".strip() for t in tuners if t['in_use']]
-    return len(tuners) - len(busy), busy
+    return tuner_pool.free_for(channel, CHANNEL_BOXES, tuners)
 
-def no_tuner_message():
+def boxes_for(channel):
+    """The boxes to try for a channel, best first (ones with a free tuner)"""
+    return tuner_pool.box_order(channel, CHANNEL_BOXES, tuner_details() if len(HDHR_IPS) > 1 else None) \
+        or HDHR_IPS[:1]
+
+def make_room(channel, title):
+    """Before a recording starts: if no tuner is free for the channel, stop a live TV viewer on a
+    box that carries it. Returns no_tuner_message's answer afterwards."""
+    busy = no_tuner_message(channel)
+    if busy and LIVE:
+        title = title or f"channel {channel}"
+        stopped = LIVE.stop_for_recording(CHANNEL_BOXES.get(str(channel)), title)
+        if stopped:
+            print(f"[Live] Stopped live TV on {stopped['channel']} to record {title}")
+            t.sleep(2)  # the tuner takes a moment to let go
+            busy = no_tuner_message(channel)
+    return busy
+
+def no_tuner_message(channel=None):
     """A reason to refuse starting a recording right now, or None if a tuner is free"""
-    free, busy = tuner_usage()
+    free, busy = tuner_usage(channel)
     if free == 0:
         what = "Both tuners are" if len(busy) == 2 else f"All {len(busy)} tuners are" if len(busy) > 1 else "The tuner is"
         return f"{what} in use ({', '.join(busy)}). Stop one of those to record this."
@@ -1052,10 +1068,13 @@ def signal_summary(channel_number):
     return {'bars': bars, 'weak': bars <= 2 or (s.get('seq') or 0) < 100, 'snq': snq, 'ss': s.get('ss') or 0,
             'seq': s.get('seq') or 0, 'locked': bool(s.get('locked')), 'at': s.get('at')}
 
-def _free_tuner_index():
+def _free_tuner(channel=None):
+    """(box, tuner on that box) free for measuring a channel, or None"""
     tuners = tuner_details()
-    free = [t['index'] for t in tuners or [] if not t['in_use']]
-    return free[-1] if free else None  # the last one: recordings ask for "any tuner", which starts at the first
+    boxes = CHANNEL_BOXES.get(str(channel)) if channel is not None else None
+    free = [t for t in tuners or [] if not t['in_use'] and (not boxes or t['box'] in boxes)]
+    # The last one: recordings ask for "any tuner", which starts at the first
+    return (free[-1]['box'], free[-1]['box_index']) if free else None
 
 def _recording_due_soon(minutes=5):
     soon = (datetime.now() + timedelta(minutes=minutes)).timestamp()
@@ -1065,10 +1084,10 @@ def _recording_due_soon(minutes=5):
 def check_signal(channel_number):
     """Measure one channel now. Returns the summary, or None with no free tuner."""
     from hdhomerun_control import measure_signal
-    tuner = _free_tuner_index()
-    if tuner is None:
+    free = _free_tuner(channel_number)
+    if free is None:
         return None
-    reading = measure_signal(HDHR_IP, tuner, channel_number)
+    reading = measure_signal(free[0], free[1], channel_number)
     if not reading:
         return None
     _record_signal(reading)
@@ -1088,11 +1107,11 @@ def scan_signals():
             if ch in measured:
                 SIGNAL_STATE['done'] += 1
                 continue
-            tuner = _free_tuner_index()
-            if tuner is None or _recording_due_soon():
+            free = _free_tuner(ch)
+            if free is None or _recording_due_soon():
                 print("[Signal] Scan stopped: tuners needed for recording")
                 break
-            reading = measure_signal(HDHR_IP, tuner, ch)
+            reading = measure_signal(free[0], free[1], ch)
             if reading:
                 _record_signal(reading)
                 measured |= set(reading['channels']) | {ch}
@@ -1106,10 +1125,7 @@ def scan_signals():
 
 def sample_live_signals():
     """Record the signal on channels tuners are streaming right now (ours or another app's)"""
-    try:
-        status = requests.get(f"http://{HDHR_IP}/status.json", timeout=3).json()
-    except Exception:
-        return
+    status = [s for ip in HDHR_IPS for s in (_box_status(ip) or [])]
     for s in status:
         if s.get('VctNumber') and s.get('SignalQualityPercent') is not None:
             _record_signal({'ss': s.get('SignalStrengthPercent', 0), 'snq': s.get('SignalQualityPercent', 0),
@@ -1145,7 +1161,7 @@ def api_signal():
 def api_signal_scan():
     if SIGNAL_STATE['scanning']:
         return jsonify({'message': 'Already checking.'})
-    if _free_tuner_index() is None:
+    if _free_tuner() is None:
         return jsonify({'error': 'Every tuner is in use right now. Try again when one is free.'}), 409
     threading.Thread(target=scan_signals, daemon=True).start()
     return jsonify({'message': 'Checking the signal on every channel. This takes a minute or two.'})
@@ -1526,8 +1542,9 @@ def record_channel(channel_key, duration_min, crf=23, preset="fast", record_form
     filepath = _unique_path(folder, base, ext)
     filename = os.path.basename(filepath)
     title = title or (prog or {}).get('title')
-    url = f"http://{HDHR_IP}:5004/auto/v{channel_key}"
+    boxes = boxes_for(channel_key)
     ACTIVE_RECORDINGS[filename] = {
+        'box': boxes[0] if boxes else HDHR_IP,
         'title': title or '',
         'channel_number': str(channel_key),
         'channel_name': chname,
@@ -1543,7 +1560,7 @@ def record_channel(channel_key, duration_min, crf=23, preset="fast", record_form
     _save_active()
     mqtt_poke()
     try:
-        _record_to_file(channel_key, duration_min, crf, preset, record_format, started_at, filepath, url)
+        _record_to_file(channel_key, duration_min, crf, preset, record_format, started_at, filepath, boxes)
         # Config recording.nfo (default on): plot, air date and episode details for Jellyfin/Kodi
         if prog and os.path.exists(filepath) and config.get('recording', 'nfo', True):
             try:
@@ -1751,13 +1768,17 @@ def _load_active():
     except (OSError, ValueError):
         return []
 
-def _record_to_file(channel_key, duration_min, crf, preset, record_format, started_at, filepath, url,
+def _record_to_file(channel_key, duration_min, crf, preset, record_format, started_at, filepath, boxes,
                     force_cpu=False):
-    """force_cpu: the graphics card encoder failed partway; record the rest on the CPU"""
+    """boxes: the HDHomeRun boxes to record from, best first; when one turns out to have no free
+    tuner, the next is tried. force_cpu: the graphics card encoder failed partway; record the
+    rest on the CPU."""
     global current_process, stop_event
 
     stop_event.clear()
     began = datetime.now()
+    url = tuner_pool.stream_url(boxes[0], channel_key)
+    ACTIVE_RECORDINGS.get(os.path.basename(filepath), {})['box'] = boxes[0]
 
     # Determine ffmpeg binary: prefer configured path, fallback to system ffmpeg
     ffmpeg_bin = FFMPEG_PATH if os.path.exists(FFMPEG_PATH) else "ffmpeg"
@@ -1826,6 +1847,12 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
         print(f"[Recording] Saved captions: {os.path.basename(captions.path)}")
     failed = proc.returncode != 0 and not stopped
     reason = _explain_ffmpeg_failure(tail) if failed else None
+    # Another app took this box's last tuner since it was picked: try the next box
+    if failed and reason.startswith('No free tuner') and len(boxes) > 1 \
+            and (datetime.now() - began).total_seconds() < 30:
+        print(f"[Recording] No free tuner on {boxes[0]}; trying {boxes[1]}")
+        return _record_to_file(channel_key, duration_min, crf, preset, record_format, started_at, filepath,
+                               boxes[1:], force_cpu)
     # A graphics card encoder can fail on a live stream even after passing its test encode. Record
     # the rest on the CPU rather than lose the show, and stop using that encoder until it's
     # re-tested in Settings or LineDrive restarts.
@@ -1844,7 +1871,7 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
                    f"on the CPU, and recordings use the CPU until it passes Test in Settings.")
         print(f"[Recording] {message}")
         NOTICES.append({'message': message, 'at': datetime.now().isoformat()})
-        return _record_to_file(channel_key, left / 60, crf, preset, record_format, started_at, target, url,
+        return _record_to_file(channel_key, left / 60, crf, preset, record_format, started_at, target, boxes,
                                force_cpu=True)
     # Attempt to mark matching scheduled job as completed (or failed); when stopped for a
     # restart it stays 'recording' so the restarted LineDrive resumes it
@@ -4647,7 +4674,7 @@ def api_guide_record():
             # Already airing: start now and capture the rest of it
             if recording_now(num, start_dt, end_dt):
                 return jsonify({'error': 'Already recording'}), 409
-            busy = no_tuner_message()
+            busy = make_room(num, prog.get('title'))
             if busy:
                 return jsonify({'error': busy}), 409
             minutes = start_in_progress(num, prog, end_dt)
@@ -4670,7 +4697,7 @@ def api_guide_record():
     message = f"Recording {prog.get('title')}: {'; '.join(created)}"
     # The rule starts with the next airing; if this one is on now, catch the rest of it too
     if on_now and not recording_now(num, start_dt, end_dt):
-        busy = no_tuner_message()
+        busy = make_room(num, prog.get('title'))
         if busy:
             message += f". Couldn't record this airing: {busy}"
         else:
@@ -4771,10 +4798,85 @@ def api_watch(channel):
     """For the guide's Watch in VLC button: the tuner's stream for this channel, if a tuner is free"""
     if channel not in channels:
         return jsonify({'error': f"No channel {channel} on the tuner"}), 404
-    busy = no_tuner_message()
+    busy = no_tuner_message(channel)
     if busy:
         return jsonify({'error': busy.replace('to record this', 'to watch this')}), 409
-    return jsonify({'url': f"http://{HDHR_IP}:5004/auto/v{channel}", 'playlist': f"/watch/{channel}.m3u"})
+    return jsonify({'url': tuner_pool.stream_url(boxes_for(channel)[0], channel), 'playlist': f"/watch/{channel}.m3u"})
+
+# ---- Live TV in the guide ----------------------------------------------------------------------
+import live as live_tv
+
+def _live_died(session, reason):
+    """A graphics card that fails on a live stream is treated as it is for a recording"""
+    if session.encoder not in (None, 'cpu') and not reason.startswith(NOT_ENCODER_FAILURES):
+        encoders.mark_broken(session.encoder, config.get('recording', 'vaapi_device', '') or None,
+                             f"failed during live TV: {reason}")
+
+LIVE = live_tv.LiveTV(os.path.join(DATA_DIR, 'live'), explain=_explain_ffmpeg_failure, on_died=_live_died)
+
+def live_video_args(ffmpeg_bin):
+    """(ffmpeg video arguments, encoder) for live TV: 720p, deinterlaced, on the encoder chosen
+    for recordings (falling back to the CPU like they do), with the CPU's quicker preset since
+    it has to keep up as it airs"""
+    device = config.get('recording', 'vaapi_device', '') or None
+    encoder, _ = encoders.choose(config.get('recording', 'encoder', 'cpu'), ffmpeg_bin, device)
+    args = encoders.video_args(encoder, 23, encoders.DEINTERLACE_720P, device)
+    if encoder == 'cpu':
+        args[args.index('-preset') + 1] = 'veryfast'
+    return args, encoder
+
+@app.route('/api/live/start', methods=['POST'])
+def api_live_start():
+    """Start live TV for the guide's player. Config live.max_viewers (default 2): how many at once."""
+    channel = str((request.get_json() or {}).get('channel', ''))
+    if channel not in channels:
+        return jsonify({'error': f"No channel {channel} on the tuner"}), 404
+    busy = no_tuner_message(channel)
+    if busy:
+        return jsonify({'error': busy.replace('to record this', 'to watch this')}), 409
+    ffmpeg_bin = FFMPEG_PATH if os.path.exists(FFMPEG_PATH) else "ffmpeg"
+    box = boxes_for(channel)[0]
+    args, encoder = live_video_args(ffmpeg_bin)
+    try:
+        session = LIVE.start(channel, box, tuner_pool.stream_url(box, channel), ffmpeg_bin, args,
+                             int(config.get('live', 'max_viewers', 2) or 2), encoder)
+    except live_tv.LiveError as e:
+        return jsonify({'error': str(e)}), 409
+    print(f"[Live] Watching {channel} {channels[channel]} from {box} ({encoder})")
+    mqtt_poke()
+    return jsonify({'id': session.id, 'playlist': f"/live/{session.id}/index.m3u8", 'channel': channel,
+                    'name': channels[channel], 'heartbeat': 10})
+
+@app.route('/api/live/<sid>/ping', methods=['POST'])
+def api_live_ping(sid):
+    running, reason = LIVE.touch(sid)
+    return jsonify({'running': True} if running else {'running': False, 'reason': reason})
+
+@app.route('/api/live/<sid>/stop', methods=['POST'])
+def api_live_stop(sid):
+    if LIVE.stop(sid):
+        print(f"[Live] Player closed")
+        mqtt_poke()
+    return jsonify({'status': 'ok'})
+
+@app.route('/live/<sid>/<name>')
+def live_file(sid, name):
+    path = LIVE.file(sid, name)
+    if not path:
+        return ('', 404)  # the player retries while the first segments are being made
+    from flask import send_file
+    playlist = name.endswith('.m3u8')
+    resp = send_file(path, mimetype='application/vnd.apple.mpegurl' if playlist else 'video/mp2t', conditional=False)
+    resp.headers['Cache-Control'] = 'no-store' if playlist else 'max-age=60'
+    return resp
+
+def run_live_reaper():
+    while True:
+        time.sleep(5)
+        try:
+            LIVE.reap()
+        except Exception as e:
+            print(f"[Live] {e}")
 
 @app.route('/watch/<channel>.m3u')
 def watch_playlist(channel):
@@ -4782,7 +4884,7 @@ def watch_playlist(channel):
     converted. Closing the player frees the tuner."""
     if channel not in channels:
         return jsonify({'error': f"No channel {channel} on the tuner"}), 404
-    body = f"#EXTM3U\n#EXTINF:-1,{channel} {channels[channel]}\nhttp://{HDHR_IP}:5004/auto/v{channel}\n"
+    body = f"#EXTM3U\n#EXTINF:-1,{channel} {channels[channel]}\n{tuner_pool.stream_url(boxes_for(channel)[0], channel)}\n"
     return Response(body, mimetype='audio/x-mpegurl',
                     headers={'Content-Disposition': f'attachment; filename="LineDrive {channel}.m3u"'})
 
@@ -5144,7 +5246,7 @@ def api_setup_stations():
 def api_setup_save():
     """Save settings to config.json and restart LineDrive to apply them"""
     data = request.get_json() or {}
-    ip = str(data.get('hdhr_ip', '')).strip()
+    ip = ', '.join(tuner_pool.parse_addresses(data.get('hdhr_ip', '')))  # one box or several
     zip_code = str(data.get('zip_code', '')).strip().upper()
     if not ip:
         return jsonify({'error': 'Enter your HDHomeRun address'}), 400
@@ -5216,6 +5318,7 @@ def _restart_soon():
             if not ACTIVE_RECORDINGS:
                 break
             _t.sleep(1)
+    LIVE.stop_all()  # its ffmpegs would otherwise hold tuners after the restart
     print("[Setup] Settings saved; restarting LineDrive")
     sys.stdout.flush()
     if MQTT_BRIDGE:
@@ -5560,6 +5663,8 @@ def api_status():
         'failures': failures,
         'notices': [n for n in NOTICES if now - datetime.fromisoformat(n['at']) < timedelta(days=2)],
         'tuners': tuner_details(),
+        'boxes': len(HDHR_IPS),
+        'boxes_down': BOXES_DOWN,
         'this_pc': _local_ip(),
         'version': __version__,
         'jellyfin': bool((config.get('jellyfin', default={}) or {}).get('url')
@@ -5602,10 +5707,15 @@ def free_tuner(index):
         return 404, 'No such tuner'
     if not tuner['in_use']:
         return 200, 'That tuner is already free'
+    if tuner.get('live'):
+        for sid, session in list(LIVE.sessions.items()):
+            if (session.box, session.channel) == (tuner['box'], tuner['channel_number']):
+                LIVE.stop(sid, 'Stopped from the tuner list on the home page.')
+                return 200, f"Stopped live TV on {tuner['channel_number']} {tuner['channel_name']}"
     if tuner['ours']:
         return 409, 'LineDrive is recording on that tuner; use Stop recording instead'
     try:
-        hdhr_release(HDHR_IP, index)
+        hdhr_release(tuner['box'], tuner['box_index'])
     except Exception as e:
         return 502, f"Couldn't free the tuner: {e}"
     print(f"[Tuners] Released tuner{index} ({tuner['channel_number']} {tuner['channel_name']}, held by {tuner['target_ip']})")
@@ -5682,7 +5792,9 @@ def start_mqtt():
 @app.route("/record_now", methods=["POST"])
 def record_now():
     data = request.get_json()
-    busy = no_tuner_message()
+    if str(data.get('channel')) not in channels:
+        return jsonify({"message": f"No channel {data.get('channel')} on the tuner", "error": f"No channel {data.get('channel')} on the tuner"}), 404
+    busy = make_room(data['channel'], None)
     if busy:
         return jsonify({"message": busy, "error": busy}), 409
     run_threaded(record_channel, data['channel'], int(data['duration']),
@@ -5995,6 +6107,9 @@ if __name__=="__main__":
     # Per-channel signal strength for the guide
     if HDHR_IP:
         threading.Thread(target=run_signal_loop, daemon=True).start()
+
+    # Live TV: stop players whose page has gone
+    threading.Thread(target=run_live_reaper, daemon=True).start()
 
     # Home Assistant integration (if mqtt.host is configured)
     start_mqtt()

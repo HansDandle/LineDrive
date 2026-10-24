@@ -55,9 +55,14 @@
         return;
       }
       devices.forEach((d) => {
+        // Clicking a box adds it to the addresses, or takes it out (several boxes pool their tuners)
         const pick = el('button', {
-          type: 'button', class: 'device' + (d.ip === ipInput.value ? ' selected' : ''),
-          onclick: () => { ipInput.value = d.ip; checkTuner(); markSelected(); },
+          type: 'button', class: 'device' + (addresses().includes(d.ip) ? ' selected' : ''),
+          onclick: () => {
+            const list = addresses();
+            ipInput.value = (list.includes(d.ip) ? list.filter((a) => a !== d.ip) : list.concat(d.ip)).join(', ');
+            checkTuner(); markSelected();
+          },
         }, el('strong', { text: d.name }), el('span', { class: 'muted small', text: d.ip + ' · ' + d.tuners + ' tuners' + (d.model ? ' · ' + d.model : '') }));
         pick.dataset.ip = d.ip;
         devicesBox.append(pick);
@@ -72,25 +77,45 @@
     }
   }
 
+  const addresses = () => ipInput.value.split(/[\s,;]+/).filter(Boolean);
+
   function markSelected() {
-    devicesBox.querySelectorAll('.device').forEach((b) => b.classList.toggle('selected', b.dataset.ip === ipInput.value.trim()));
+    const list = addresses();
+    devicesBox.querySelectorAll('.device').forEach((b) => b.classList.toggle('selected', list.includes(b.dataset.ip)));
   }
 
   async function checkTuner() {
-    const ip = ipInput.value.trim();
+    const list = addresses();
     const result = $('tunerResult');
-    if (!ip) return;
+    if (!list.length) return;
     result.textContent = 'Checking…';
     result.className = 'field-note';
-    try {
-      const data = await getJSON('/api/setup/lineup?ip=' + encodeURIComponent(ip));
-      result.textContent = data.warning ? data.warning
-        : '✓ ' + data.device.name + ': ' + data.device.tuners + ' tuners, ' + data.channels + ' channels';
-      result.className = 'field-note ' + (data.warning ? 'warn' : 'ok');
-      showMajors(data.majors);
-    } catch (e) {
-      result.textContent = e.message;
-      result.className = 'field-note bad';
+    const lines = [];
+    let worst = 'ok';
+    const majors = new Map();
+    for (const ip of list) {
+      try {
+        const data = await getJSON('/api/setup/lineup?ip=' + encodeURIComponent(ip));
+        lines.push(data.warning ? ip + ': ' + data.warning
+          : '✓ ' + data.device.name + (list.length > 1 ? ' (' + ip + ')' : '') + ': ' + data.device.tuners + ' tuners, ' + data.channels + ' channels');
+        if (data.warning && worst === 'ok') worst = 'warn';
+        // Stations from every box, each channel once
+        (data.majors || []).forEach((m) => {
+          const have = majors.get(m.major) || [];
+          m.channels.forEach((c) => { if (!have.includes(c)) have.push(c); });
+          majors.set(m.major, have);
+        });
+      } catch (e) {
+        lines.push(e.message);
+        worst = 'bad';
+      }
+    }
+    result.textContent = lines.join(' · ');
+    result.className = 'field-note ' + worst;
+    if (majors.size) {
+      const num = (m) => (/^\d+$/.test(m) ? parseInt(m, 10) : 999);
+      showMajors(Array.from(majors, ([major, chans]) => ({ major, channels: chans })).sort((a, b) => num(a.major) - num(b.major)));
+    } else {
       $('stationBox').hidden = true;
     }
     markSelected();

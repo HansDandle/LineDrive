@@ -94,7 +94,7 @@
 
     renderUpcoming(s.upcoming || [], s);
 
-    renderTuners(s.tuners, s.this_pc);
+    renderTuners(s.tuners, s.this_pc, s.boxes || 1, s.boxes_down || []);
 
     const notices = s.notices || [];
     $('noticeBox').hidden = !notices.length;
@@ -130,24 +130,27 @@
   }
 
   // Tuners, with a kill switch for streams other apps left open
-  function renderTuners(tuners, thisPc) {
+  function renderTuners(tuners, thisPc, boxes, down) {
     const list = $('tunerList');
     if (!tuners) {
-      list.replaceChildren(el('li', { class: 'tuner warn', text: 'Can’t reach the HDHomeRun' }));
+      list.replaceChildren(el('li', { class: 'tuner warn', text: boxes > 1 ? 'Can’t reach any HDHomeRun' : 'Can’t reach the HDHomeRun' }));
       return;
     }
-    list.replaceChildren(...tuners.map((t) => {
-      const label = 'Tuner ' + (t.index + 1) + ': ';
+    list.replaceChildren(...down.map((ip) => el('li', { class: 'tuner warn', text: 'Can’t reach the HDHomeRun at ' + ip })),
+                         ...tuners.map((t) => {
+      // With several boxes, say which one each tuner is on
+      const label = 'Tuner ' + (t.index + 1) + (boxes > 1 ? ' (box ' + t.box_number + ')' : '') + ': ';
       if (!t.in_use) return el('li', { class: 'tuner' }, label, el('span', { class: 'tuner-free', text: 'free' }));
-      const who = t.ours ? 'LineDrive' : (t.target_ip === thisPc ? 'another app on this PC' : 'another device (' + t.target_ip + ')');
+      const who = t.live ? 'LineDrive live TV' : t.ours ? 'LineDrive' : (t.target_ip === thisPc ? 'another app on this PC' : 'another device (' + t.target_ip + ')');
       const item = el('li', { class: 'tuner' + (t.ours ? '' : ' other') },
         label, el('strong', { text: t.channel_number + ' ' + t.channel_name }), ' · ' + who);
-      if (!t.ours) {
+      if (!t.ours || t.live) {
         item.append(' ', el('button', {
-          type: 'button', class: 'btn btn-quiet btn-sm', text: 'Free up',
+          type: 'button', class: 'btn btn-quiet btn-sm', text: t.live ? 'Stop' : 'Free up',
           title: 'Stop this stream so LineDrive can use the tuner',
           onclick: async (e) => {
-            const where = t.target_ip === thisPc ? 'another app on this PC (like Jellyfin or Plex)' : t.target_ip;
+            const where = t.live ? 'live TV in a LineDrive guide' :
+              t.target_ip === thisPc ? 'another app on this PC (like Jellyfin or Plex)' : t.target_ip;
             if (!confirm('Stop the ' + t.channel_number + ' ' + t.channel_name + ' stream used by ' + where +
                          '? Anyone watching it there will be cut off.')) return;
             e.currentTarget.disabled = true;

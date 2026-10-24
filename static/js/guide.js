@@ -515,6 +515,132 @@
     return false;
   }
 
+  // ---- Live TV ------------------------------------------------------------
+  // LineDrive converts the tuner's stream to HLS for this player (hls.js, or Safari's own HLS).
+  // The player holds a tuner, so it checks in every few seconds and LineDrive stops the stream
+  // when it stops hearing from it, when it's closed, or when a recording needs the tuner.
+
+  const live = {
+    box: document.getElementById('player'),
+    screen: document.getElementById('playerScreen'),
+    video: document.getElementById('playerVideo'),
+    title: document.getElementById('playerTitle'),
+    msg: document.getElementById('playerMsg'),
+    pip: document.getElementById('playerPip'),
+    session: null,
+    hls: null,
+    beat: null,
+  };
+
+  function liveMessage(text, onClick) {
+    live.msg.textContent = text || '';
+    live.msg.classList.toggle('click', !!onClick);
+    live.msg.onclick = onClick || null;
+  }
+
+  function detachPlayback() {
+    clearInterval(live.beat);
+    live.beat = null;
+    if (live.hls) live.hls.destroy();
+    live.hls = null;
+    live.video.removeAttribute('src');
+    live.video.load();
+  }
+
+  async function stopLive(beacon) {
+    const sid = live.session;
+    live.session = null;
+    detachPlayback();
+    if (!sid) return;
+    const url = '/api/live/' + sid + '/stop';
+    if (beacon && navigator.sendBeacon) navigator.sendBeacon(url);
+    else await fetch(url, { method: 'POST' }).catch(() => {});
+  }
+
+  // The first segments take a few seconds to make
+  async function waitForPlaylist(url, sid) {
+    for (let i = 0; i < 30 && live.session === sid; i++) {
+      const res = await fetch(url, { cache: 'no-store' }).catch(() => null);
+      if (res && res.ok && (await res.text()).includes('.ts')) return true;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return false;
+  }
+
+  async function play() {
+    try {
+      await live.video.play();
+      liveMessage('');
+    } catch (e) {
+      // Autoplay with sound refused: start muted, and let a tap turn the sound on
+      live.video.muted = true;
+      await live.video.play().catch(() => {});
+      liveMessage('Tap for sound', () => { live.video.muted = false; liveMessage(''); });
+    }
+  }
+
+  async function watchHere(ch) {
+    await stopLive();
+    const data = await post('/api/live/start', { channel: ch.number });
+    const sid = data.id;
+    live.session = sid;
+    live.title.textContent = data.channel + ' ' + data.name;
+    live.box.hidden = false;
+    live.pip.hidden = !document.pictureInPictureEnabled;
+    liveMessage('Tuning ' + data.channel + '…');
+    live.beat = setInterval(async () => {
+      const res = await fetch('/api/live/' + sid + '/ping', { method: 'POST' }).catch(() => null);
+      const state = res && (await res.json().catch(() => null));
+      if (state && !state.running && live.session === sid) {
+        live.session = null;
+        detachPlayback();
+        liveMessage(state.reason);
+      }
+    }, (data.heartbeat || 10) * 1000);
+    closePanel();
+    if (!(await waitForPlaylist(data.playlist, sid))) {
+      if (live.session === sid) {
+        await stopLive();
+        liveMessage('The stream didn’t start. Try again, or try another channel.');
+      }
+      return false;
+    }
+    if (live.session !== sid) return false;
+    if (window.Hls && Hls.isSupported()) {
+      live.hls = new Hls({ liveSyncDurationCount: 2, lowLatencyMode: false });
+      live.hls.on(Hls.Events.ERROR, (event, err) => {
+        if (err.fatal && err.type === Hls.ErrorTypes.MEDIA_ERROR) live.hls.recoverMediaError();
+        else if (err.fatal) liveMessage('Playback stopped (' + err.details + ').');
+      });
+      live.hls.loadSource(data.playlist);
+      live.hls.attachMedia(live.video);
+      live.hls.on(Hls.Events.MANIFEST_PARSED, play);
+    } else if (live.video.canPlayType('application/vnd.apple.mpegurl')) {
+      live.video.src = data.playlist;  // Safari, iPhone, iPad
+      play();
+    } else {
+      await stopLive();
+      liveMessage('This browser can’t play live TV. Use Watch in VLC instead.');
+    }
+    return false;
+  }
+
+  document.getElementById('playerClose').addEventListener('click', async () => {
+    await stopLive();
+    live.box.hidden = true;
+  });
+  live.pip.addEventListener('click', () => {
+    if (document.pictureInPictureElement) document.exitPictureInPicture();
+    else live.video.requestPictureInPicture().catch((e) => toast(e.message, true));
+  });
+  document.getElementById('playerFull').addEventListener('click', () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (live.screen.requestFullscreen) live.screen.requestFullscreen().catch((e) => toast(e.message, true));
+    else if (live.video.webkitEnterFullscreen) live.video.webkitEnterFullscreen();  // iPhone
+  });
+  // Closing or leaving the page frees the tuner straight away
+  window.addEventListener('pagehide', () => stopLive(true));
+
   function actionButton(label, sub, cls, handler) {
     const b = el('button', cls || '');
     b.type = 'button';
@@ -578,6 +704,7 @@
       actions.append(el('p', 'p-meta', 'This has already aired.'));
     } else {
       if (airing) {
+        actions.append(actionButton('Watch here', 'Live, in a player beside the guide', '', () => watchHere(ch)));
         actions.append(actionButton('Watch in VLC', 'Live from the tuner, on this device', '', () => watchInVlc(ch)));
       }
       if (airing && !p.recording_now) {

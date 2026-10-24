@@ -87,7 +87,7 @@ def _record_with_failing_gpu(dvr, monkeypatch, tmp_path, partial):
     dvr.config.config.setdefault("recording", {}).update(encoder="qsv", quality="standard", captions=False)
     path = str(tmp_path / "Show - S01E01.mp4")
     try:
-        dvr._record_to_file("24.1", 30, 23, "fast", "mp4", "2026-10-28T19:30:00", path, "http://tuner/auto/v24.1")
+        dvr._record_to_file("24.1", 30, 23, "fast", "mp4", "2026-10-28T19:30:00", path, ["tuner"])
     finally:
         dvr.config.config["recording"].update(encoder="cpu", captions=True)
     return path

@@ -5,9 +5,17 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] (4.0.0)
+## [4.0.0] - 2026-10-24
 
 ### Added
+- Live TV in the guide: **Watch here** in the details of anything on now opens a player docked in the corner of the guide, which stays while you browse, with picture-in-picture and full screen. LineDrive converts the broadcast to 720p H.264/AAC HLS as it airs (on the encoder chosen for recordings) and the player uses a bundled hls.js (Safari plays it natively).
+  - Each viewer holds a tuner. Closing the player or the page frees it at once; a player that stops checking in is stopped after about a minute.
+  - Recordings come first: when a recording needs a tuner and none is free, the longest-running viewer on a box with that channel is stopped, and the player says why. The home page's tuner list shows live TV, with a **Stop** button.
+  - At most two viewers at once by default (`live.max_viewers`). **Watch in VLC** is still there.
+- Several HDHomeRun boxes: list their addresses separated by commas in Settings (or click each discovered box) and their tuners are pooled.
+  - The channel list is every box's lineup together. A recording goes to a box that carries the channel and has a free tuner (the one with the most free first), and moves to the next box if another app took the last tuner first.
+  - Tuners are numbered across boxes (box 1's first), on the home page and in Home Assistant. A box that doesn't answer is shown as such and the others carry on.
+  - Clash warnings count every box's tuners together. SiliconDust's guide is also read from a second box when it has channels the first doesn't.
 - Graphics card encoding ([#1](https://github.com/HansDandle/LineDrive/issues/1)): Settings → Recordings → **Encode with** CPU (default), NVIDIA (NVENC), Intel Quick Sync or VAAPI (Intel/AMD on Linux). Each quality setting maps to the card's closest equivalent.
   - **Test** tries every encoder and says which work here, and why the others don't ("Cannot load libcuda.so.1", "/dev/dri/renderD128 not found", ...).
   - A card that doesn't work falls back to the CPU, with a note on the home page. One that fails partway through a live recording (some cards reject odd frames at the start of a broadcast) hands the rest of the show to the CPU, as a `(part 2)` file if some was already saved, and isn't used again until it passes **Test**.
