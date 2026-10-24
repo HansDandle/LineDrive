@@ -275,12 +275,14 @@
     return {
       hdhr_ip: v('hdhrIp'), zip_code: v('zipCode'), timezone: tzSelect.value, recordings: v('recordings'),
       quality: v('quality'),
-      captions: $('captions').checked, nfo: $('nfo').checked,
+      captions: $('captions').checked, nfo: $('nfo').checked, comskip: $('comskip').checked,
+      comskip_mode: document.querySelector('input[name="comskipMode"]:checked') ? document.querySelector('input[name="comskipMode"]:checked').value : undefined,
       // Only once the tuner's stations are listed, so a tuner that didn't answer doesn't clear them
       distant_channels: stations.length ? Array.from(stationState().distant) : undefined,
       hidden_channels: stations.length ? Array.from(stationState().hidden) : undefined,
       jellyfin: { url: v('jfUrl'), api_key: v('jfKey'), recordings_path: v('jfPath') },
       jellyseerr: { url: v('jsUrl'), api_key: v('jsKey') },
+      sonarr: { url: v('soUrl'), api_key: v('soKey') },
       mqtt: { host: v('mqHost'), port: v('mqPort'), username: v('mqUser'), password: v('mqPass') },
     };
   }

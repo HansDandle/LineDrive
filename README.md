@@ -25,10 +25,12 @@ plain-English questions ("when's the next basketball game?"), and recordings you
   - "record Abbott Elementary when it comes back" (it watches the guide and starts recording when the new season shows up)
 - **Series that don't waste tuners.** "New episodes only" follows each first-run episode wherever it airs (preemptions, sister stations), skips reruns, and skips episodes you already have.
 - **Recordings your media server understands.** `TV/<Show>/Season 52/Show - S52E01 - Episode Title.mp4` (or air-date names), `Movies/<Title (Year)>/`, plus a `.nfo` with the plot and air date and a `.srt` of the broadcast's closed captions (either can be turned off in Settings). Jellyfin, Emby, Kodi and Plex pick them up with proper titles and subtitles.
+- **Ad breaks marked or cut (optional).** Comskip finds the commercials. LineDrive either adds them as chapters, so Jellyfin (with its Chapter Segments plugin) and Kodi can skip them, or cuts them out for Plex and everything else, keeping the uncut original for a week in case a cut was wrong.
 - **Tuner-aware.** Warns when you schedule more recordings at once than you have tuners, and badges the one that won't get a tuner until you sort it out. Refuses to "record" when every tuner is busy (and tells you who has them), reports failed recordings, and has a **kill switch** for streams other apps leave open (hello, Jellyfin live TV).
 - **Integrations (all optional):**
   - **Jellyfin:** new recordings appear seconds after they finish.
   - **Jellyseerr:** "download Dune" or "get season 2 of The Bear" sends a request to Radarr/Sonarr.
+  - **Sonarr:** an episode LineDrive recorded is unmonitored in Sonarr, so it isn't downloaded too.
   - **Home Assistant:** a LineDrive device with status, next recording, tuners free and last failure sensors, plus Stop and Free tuner buttons, via MQTT auto-discovery.
 
 | Guide | Fire TV mode | Ask LineDrive | Phone |
@@ -125,6 +127,7 @@ Everything is on the **Settings** page (gear icon). It writes `config.json` in t
 | Stations | Tick **Out of market** for another city's stations your antenna also receives, **Hide** to leave a station out of the guide. Saved as you tick. |
 | Jellyfin | URL + API key (Dashboard → API Keys). Set *Recordings folder as Jellyfin sees it* to the path the recordings are mounted at inside Jellyfin. |
 | Jellyseerr | URL + API key (Settings → General). |
+| Sonarr | URL + API key (Settings → General). After an episode records, LineDrive unmonitors it in Sonarr. Only that episode's monitored flag changes; Sonarr doesn't need to see the recordings folder. Movies and sports are skipped. |
 | Home Assistant | Your MQTT broker. The LineDrive device appears on its own. |
 
 ### Jellyfin / Plex
@@ -165,7 +168,7 @@ pip install -r requirements.txt pytest
 pytest
 ```
 
-The tests use a fixed week of real listings (`tests/fixtures/guide_sample.json`) and don't need a tuner. See [CONTRIBUTING.md](CONTRIBUTING.md).
+The tests use a fixed week of real listings (`tests/fixtures/guide_sample.json`) and don't need a tuner. See [CONTRIBUTING.md](CONTRIBUTING.md), and [ROADMAP.md](ROADMAP.md) for what's planned.
 
 | File | What it is |
 |---|---|
@@ -174,6 +177,8 @@ The tests use a fixed week of real listings (`tests/fixtures/guide_sample.json`)
 | `epg_zap2it.py` | guide download and parsing |
 | `hdhomerun_control.py` | tuner discovery and the control protocol (kill switch) |
 | `media_requests.py` | Jellyseerr requests |
+| `sonarr.py` | Sonarr handoff (unmonitor recorded episodes) |
+| `comskip.py`, `comskip.ini` | commercial marking (chapters + .edl) |
 | `mqtt_bridge.py` | Home Assistant integration |
 
 ## Legal

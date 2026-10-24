@@ -1,3 +1,15 @@
+# Comskip (marks commercial breaks; off unless turned on in Settings) isn't packaged for Debian,
+# so build it against the same ffmpeg libraries the final image installs
+FROM python:3.12-slim AS comskip
+ARG COMSKIP_COMMIT=a140b6ac8bc8f596729e9052819affc779c3b377
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential autoconf automake libtool pkg-config \
+       git ca-certificates libargtable2-dev libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
+    && git clone https://github.com/erikkaashoek/Comskip /src \
+    && cd /src && git checkout "$COMSKIP_COMMIT" \
+    && ./autogen.sh && ./configure && make -j"$(nproc)" \
+    && install -m 755 comskip /usr/local/bin/comskip
+
 FROM python:3.12-slim
 
 LABEL org.opencontainers.image.title="LineDrive" \
@@ -7,8 +19,9 @@ LABEL org.opencontainers.image.title="LineDrive" \
 
 # ffmpeg records and encodes the tuner streams; tzdata makes TZ work
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg tzdata \
+    && apt-get install -y --no-install-recommends ffmpeg tzdata libargtable2-0 \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=comskip /usr/local/bin/comskip /usr/local/bin/comskip
 
 WORKDIR /app
 COPY requirements.txt .

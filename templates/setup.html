@@ -99,6 +99,17 @@
                     <label class="check"><input type="checkbox" id="nfo"{% if settings.nfo %} checked{% endif %} /><span>Show details <span class="muted small">(.nfo: plot, air date, season and episode)</span></span></label>
                     <p class="field-note">Jellyfin, Emby and Kodi read the .nfo for the plot and air date; without it they go by the file name. Plex ignores .nfo files.</p>
                 </fieldset>
+                <fieldset class="field">
+                    <legend>Commercials</legend>
+                    <label class="check"><input type="checkbox" id="comskip"{% if settings.comskip %} checked{% endif %}{% if not comskip_available %} disabled{% endif %} /><span>Find ad breaks with Comskip</span></label>
+                    {% if comskip_available %}
+                    <label class="check"><input type="radio" name="comskipMode" value="chapters"{% if settings.comskip_mode != 'cut' %} checked{% endif %} /><span>Mark them as chapters <span class="muted small">(Jellyfin, Kodi; the video isn't changed)</span></span></label>
+                    <label class="check"><input type="radio" name="comskipMode" value="cut"{% if settings.comskip_mode == 'cut' %} checked{% endif %} /><span>Cut them out <span class="muted small">(works everywhere, including Plex)</span></span></label>
+                    <p class="field-note">Comskip runs after each recording; it takes a few minutes per show and uses the CPU, and the recording appears in Jellyfin once it's done. <strong>Chapters:</strong> in Jellyfin 10.10+, the Chapter Segments plugin makes the “Commercial” chapters skippable; Kodi skips them from the .edl; Plex and Emby show the chapters to jump past. <strong>Cut:</strong> Comskip sometimes takes a scene for an ad, and a cut can't be put back, so the uncut original is kept in the recordings' <code>.deleted</code> folder for 7 days (move it back to restore it). Cuts are made on keyframes, so a second of ad may stay in, and a recording where Comskip's answer looks wrong gets chapters instead.</p>
+                    {% else %}
+                    <p class="field-note">Comskip isn't installed. The Docker image includes it; otherwise install it and put <code>comskip</code> on the PATH.</p>
+                    {% endif %}
+                </fieldset>
                 {% if in_docker %}
                 <p class="muted">Recordings are saved to <code>/recordings</code> in the container. Map it to a folder on your server in <code>docker-compose.yml</code>.</p>
                 {% else %}
@@ -133,6 +144,17 @@
                     </div>
                     <button type="button" class="btn btn-sm test-btn" data-kind="jellyseerr">Test Jellyseerr</button>
                     <p class="field-note" data-result="jellyseerr"></p>
+                </details>
+
+                <details class="integration" {% if settings.sonarr.url %}open{% endif %}>
+                    <summary>Sonarr <span class="muted small">don’t download what LineDrive recorded</span></summary>
+                    <div class="field-row">
+                        <div class="field"><label for="soUrl">Server URL</label><input type="text" id="soUrl" value="{{ settings.sonarr.url or '' }}" placeholder="http://192.168.1.10:8989" /></div>
+                        <div class="field"><label for="soKey">API key</label><input type="password" id="soKey" value="{{ settings.sonarr.api_key or '' }}" placeholder="Settings → General → API Key" /></div>
+                    </div>
+                    <button type="button" class="btn btn-sm test-btn" data-kind="sonarr">Test Sonarr</button>
+                    <p class="field-note" data-result="sonarr"></p>
+                    <p class="field-note">After an episode records, LineDrive unmonitors it in Sonarr so Sonarr doesn’t download it too. Nothing else in Sonarr changes, and it doesn’t need to see your recordings folder.</p>
                 </details>
 
                 <details class="integration" {% if settings.mqtt.host %}open{% endif %}>

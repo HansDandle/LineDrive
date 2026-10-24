@@ -514,7 +514,10 @@ stop_event = threading.Event()
 
 app = Flask(__name__)
 from version import __version__
+import shutil
 import cleanup
+import comskip
+import sonarr
 
 @app.context_processor
 def _template_globals():
@@ -1410,6 +1413,76 @@ def notify_jellyfin(host_path):
     except Exception as e:
         print(f"[Jellyfin] Couldn't notify: {e}")
 
+# ---- Comskip -------------------------------------------------------------------------------------
+# Config recording.comskip (default off), recording.comskip_ini (default: comskip.ini beside this
+# file). One recording at a time, at low priority, so it never competes with live recordings.
+COMSKIP_QUEUE = None
+COMSKIP_STATUS = {'current': None, 'waiting': 0}
+
+def comskip_bin():
+    return shutil.which('comskip')
+
+def queue_comskip(filepath):
+    """Mark a finished recording's ad breaks in the background. False if Comskip isn't installed."""
+    global COMSKIP_QUEUE
+    if not comskip_bin():
+        print("[Comskip] Turned on in Settings but comskip isn't installed; skipping")
+        return False
+    if COMSKIP_QUEUE is None:
+        import queue
+        COMSKIP_QUEUE = queue.Queue()
+        threading.Thread(target=_comskip_worker, daemon=True).start()
+    COMSKIP_QUEUE.put(filepath)
+    COMSKIP_STATUS['waiting'] = COMSKIP_QUEUE.qsize()
+    return True
+
+def _comskip_worker():
+    ffmpeg_bin = FFMPEG_PATH if os.path.exists(FFMPEG_PATH) else 'ffmpeg'
+    ffprobe_bin = os.path.join(os.path.dirname(ffmpeg_bin), 'ffprobe') if os.path.dirname(ffmpeg_bin) else 'ffprobe'
+    while True:
+        path = COMSKIP_QUEUE.get()
+        COMSKIP_STATUS.update(current=os.path.basename(path), waiting=COMSKIP_QUEUE.qsize())
+        try:
+            if os.path.exists(path):
+                name = os.path.basename(path)
+                breaks, _ = comskip.find_breaks(path, comskip_bin(), config.get('recording', 'comskip_ini', '') or None)
+                cut = None
+                if breaks and config.get('recording', 'comskip_mode', 'chapters') == 'cut':
+                    try:
+                        cut = comskip.cut_ads(path, breaks, ffmpeg_bin, ffprobe_bin,
+                                              keep_original=lambda p: cleanup.recycle(p, SAVE_DIR, keep_sidecars=True))
+                        print(f"[Comskip] {name}: cut {len(breaks)} ad break(s), {cut / 60:.1f} min; the uncut "
+                              f"original is in {cleanup.RECYCLE_DIR} for {cleanup.RECYCLE_DAYS} days")
+                    except RuntimeError as e:
+                        print(f"[Comskip] {name}: {e}; marking chapters instead")
+                if cut is None:
+                    marked = comskip.add_chapters(path, breaks, ffmpeg_bin, ffprobe_bin)
+                    print(f"[Comskip] {name}: {len(breaks)} ad break(s) found, {marked} marked as chapters")
+        except Exception as e:
+            print(f"[Comskip] {os.path.basename(path)}: {e}")
+        finally:
+            COMSKIP_STATUS['current'] = None
+            if os.path.exists(path):
+                notify_jellyfin(path)
+
+def sonarr_handoff(prog, started):
+    """Unmonitor a just-recorded episode in Sonarr so it isn't downloaded as well.
+    Config: sonarr.url, sonarr.api_key. Movies and sports are skipped."""
+    so = config.get('sonarr', default={}) or {}
+    genre = prog.get('genre') or ''
+    if not (so.get('url') and so.get('api_key')) or 'Movie' in genre or 'Sports' in genre:
+        return
+    try:
+        changed, message = sonarr.Sonarr(so['url'], so['api_key']).handoff(
+            prog.get('title'), prog.get('season_number'), prog.get('episode_number'),
+            f"{started:%Y-%m-%d}", prog.get('episode_title'))
+    except Exception as e:
+        print(f"[Sonarr] Couldn't hand off {prog.get('title')}: {e}")
+        return
+    print(f"[Sonarr] {message}")
+    if changed:
+        NOTICES.append({'message': message + '.', 'at': datetime.now().isoformat()})
+
 def record_channel(channel_key, duration_min, crf=23, preset="fast", record_format="mp4", started_at=None, title=None,
                    program_time=None, rule_id=None):
     """program_time: when the show being recorded started, for naming a recording that starts
@@ -1457,7 +1530,11 @@ def record_channel(channel_key, duration_min, crf=23, preset="fast", record_form
             except OSError as e:
                 print(f"[Recording] Couldn't write .nfo for {filename}: {e}")
         if os.path.exists(filepath):
-            notify_jellyfin(filepath)
+            # With Comskip on, Jellyfin hears about it once the chapters are in
+            if not (config.get('recording', 'comskip', False) and queue_comskip(filepath)):
+                notify_jellyfin(filepath)
+            if prog:
+                threading.Thread(target=sonarr_handoff, args=(prog, started), daemon=True).start()
     except RecordingFailed as e:
         print(f"[Recording] FAILED: {title or chname} on {channel_key}: {e}")
         RECORDING_FAILURES.append({'title': title or chname, 'channel_number': str(channel_key),
@@ -4879,11 +4956,15 @@ def setup_page():
         'distant_channels': config.get('guide', 'distant_channels', []) or [],
         'hidden_channels': config.get('guide', 'hidden_channels', []) or [],
         'jellyfin': c.get('jellyfin') or {}, 'jellyseerr': c.get('jellyseerr') or {}, 'mqtt': c.get('mqtt') or {},
+        'sonarr': c.get('sonarr') or {},
         'quality': config.get('recording', 'quality', 'standard') or 'standard',
         'captions': bool(config.get('recording', 'captions', True)),
         'nfo': bool(config.get('recording', 'nfo', True)),
+        'comskip': bool(config.get('recording', 'comskip', False)),
+        'comskip_mode': config.get('recording', 'comskip_mode', 'chapters') or 'chapters',
     }
     return render_template('setup.html', settings=settings, first_run=not config.is_configured(),
+                           comskip_available=bool(comskip_bin()),
                            qualities=[(k, p['label']) for k, p in QUALITY_PROFILES.items()],
                            in_docker=IN_DOCKER, cache_bust=str(int(time.time())))
 
@@ -4961,6 +5042,9 @@ def api_setup_test():
             r = requests.get(data['url'].rstrip('/') + '/api/v1/settings/main', headers={'X-Api-Key': data.get('api_key', '')}, timeout=10)
             return jsonify({'ok': r.ok, 'message': 'Connected to Jellyseerr' if r.ok
                             else f"Jellyseerr said HTTP {r.status_code} (check the API key)"})
+        if kind == 'sonarr':
+            info = sonarr.Sonarr(data['url'], data.get('api_key', '')).status()
+            return jsonify({'ok': True, 'message': f"Connected to Sonarr {info.get('version')}"})
         if kind == 'mqtt':
             import paho.mqtt.client as mqtt
             result = {}
@@ -5029,14 +5113,16 @@ def api_setup_save():
         c.setdefault('directories', {})['recordings'] = str(data['recordings']).strip()
     if data.get('quality') in QUALITY_PROFILES:
         c.setdefault('recording', {})['quality'] = data['quality']
-    for key in ('captions', 'nfo'):
+    for key in ('captions', 'nfo', 'comskip'):
         if isinstance(data.get(key), bool):
             c.setdefault('recording', {})[key] = data[key]
+    if data.get('comskip_mode') in ('chapters', 'cut'):
+        c.setdefault('recording', {})['comskip_mode'] = data['comskip_mode']
     c.setdefault('guide', {})['distant_channels'] = [str(m) for m in data.get('distant_channels', []) if str(m).isdigit()]
     if 'hidden_channels' in data:
         c['guide']['hidden_channels'] = [str(n) for n in data['hidden_channels'] if str(n).strip()]
     for section, keys in (('jellyfin', ('url', 'api_key', 'recordings_path')), ('jellyseerr', ('url', 'api_key')),
-                          ('mqtt', ('host', 'port', 'username', 'password'))):
+                          ('sonarr', ('url', 'api_key')), ('mqtt', ('host', 'port', 'username', 'password'))):
         values = data.get(section) or {}
         target = c.setdefault(section, {})
         for k in keys:

@@ -12,7 +12,7 @@ from datetime import timedelta
 
 RECYCLE_DIR = '.deleted'
 RECYCLE_DAYS = 7
-SIDECARS = ('.en.srt', '.srt', '.nfo')
+SIDECARS = ('.en.srt', '.srt', '.nfo', '.edl')
 # Folders under the recordings root that LineDrive files into; never removed even when empty
 TOP_FOLDERS = {'TV', 'Movies', 'Other'}
 
@@ -90,9 +90,10 @@ def _free_name(path):
     return f'{base} ({n}){ext}'
 
 
-def recycle(video_path, root):
+def recycle(video_path, root, keep_sidecars=False):
     """Move a recording and its .srt/.nfo into root/.deleted/ (same relative path), then remove the
-    show/season folders that left empty. Returns the recording's new path."""
+    show/season folders that left empty. Returns the recording's new path.
+    keep_sidecars: copy the .srt/.nfo instead of moving them (a cut recording keeps its own)."""
     bin_dir = os.path.join(root, RECYCLE_DIR)
     os.makedirs(bin_dir, exist_ok=True)
     marker = os.path.join(bin_dir, '.ignore')  # Jellyfin skips folders holding a .ignore file
@@ -103,7 +104,10 @@ def recycle(video_path, root):
     for path in [video_path] + sidecars(video_path):
         dest = _free_name(os.path.join(bin_dir, os.path.relpath(path, root)))
         os.makedirs(os.path.dirname(dest), exist_ok=True)
-        shutil.move(path, dest)
+        if keep_sidecars and path != video_path:
+            shutil.copyfile(path, dest)
+        else:
+            shutil.move(path, dest)
         os.utime(dest, (now, now))  # the purge counts from when it was deleted, not recorded
         moved = moved or dest
     folder = os.path.dirname(video_path)

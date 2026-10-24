@@ -5,6 +5,19 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] (4.0.0)
+
+### Added
+- Sonarr handoff: Settings → Integrations → Sonarr (URL + API key). When an episode finishes recording, LineDrive finds it in Sonarr and unmonitors it, so Sonarr doesn't download the same episode. The home page says when it did.
+  - Episodes are matched by season and episode number, else by the date it aired, else by episode title. A number or date match whose episode title disagrees is ignored, so a rerun of an older show with the same name (the original *Scrubs* vs. the revival) is never mistaken for the new one.
+  - Only the episode's monitored flag changes. Nothing is imported, moved or deleted, and Sonarr doesn't need access to the recordings folder. Shows Sonarr doesn't have, episodes it already has and movies and sports are left alone.
+- Commercial marking with Comskip (Settings → Recordings → Commercials, off by default). After a recording finishes, Comskip finds the ad breaks; LineDrive writes them into the file as **Show / Commercial** chapters and keeps a `.edl` beside it. The video is only remuxed, never cut or re-encoded. One recording is processed at a time at low CPU priority, and Jellyfin is told about the recording once its chapters are in.
+  - Jellyfin 10.10+: the Chapter Segments plugin turns the Commercial chapters into skippable segments. Kodi skips breaks from the `.edl`. Plex and Emby show the chapters to jump past them.
+  - Or **cut them out** (`recording.comskip_mode: "cut"`), for Plex, Emby and anything else that can't skip chapters. Still no re-encoding: the show is stream-copied in pieces, each starting on the keyframe just before it, so a second of ad may remain but no show is lost. The uncut original (with its `.srt`, `.nfo` and `.edl`) goes to `<recordings>/.deleted/` for 7 days, so a bad cut can be undone by moving it back. Captions are re-timed to match. A recording is given chapters instead when Comskip marks over half of it as ads, or the cut comes out the wrong length.
+  - The Docker image now includes Comskip (built from source). Use your own settings with `recording.comskip_ini`.
+  - `.mp4` and `.mkv` get chapters; Original-quality `.ts` recordings get only the `.edl`.
+  - Keep/delete clean-up removes the `.edl` with its recording.
+
 ## [3.5.0] - 2026-10-01
 
 ### Added
