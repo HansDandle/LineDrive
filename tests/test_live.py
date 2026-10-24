@@ -59,6 +59,12 @@ def test_command_makes_hls_from_the_tuner(tv):
     assert cmd[cmd.index("-f") + 1] == "hls" and cmd[-1] == os.path.join(s.folder, "index.m3u8")
     assert "libx264" in cmd and cmd[cmd.index("-c:a") + 1] == "aac"
     assert tv.holding() == {(A, "24.1")}
+    assert "-extension_picky" not in cmd  # an HLS-only option; ffmpeg rejects it for the tuner
+
+
+def test_hls_iptv_streams_take_ad_segments():
+    cmd = live.LiveTV.command("ffmpeg", "https://x.amagi.tv/playlist.m3u8", [], "/tmp/s")
+    assert cmd[cmd.index("-extension_picky") + 1] == "0" and cmd.index("-extension_picky") < cmd.index("-i")
 
 
 def test_viewer_limit(tv):

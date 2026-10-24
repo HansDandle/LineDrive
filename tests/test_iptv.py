@@ -28,6 +28,12 @@ def test_numbers_avoid_the_antenna_lineup():
     assert {"1001", "1002", "77"} <= taken
 
 
+def test_hls_streams_accept_ad_segments_other_inputs_get_no_hls_options():
+    assert iptv.input_args("https://x.amagi.tv/playlist/ch/playlist.m3u8?token=1") == ["-extension_picky", "0"]
+    assert iptv.input_args("http://iptv.example/live/movies.ts") == []
+    assert iptv.input_args("http://192.168.1.126:5004/auto/v24.1") == []
+
+
 def test_sources(tmp_path, monkeypatch):
     path = tmp_path / "list.m3u"
     path.write_text(PLAYLIST, encoding="utf-8")

@@ -2004,7 +2004,7 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
     # the crf/preset a schedule entry carries are from older versions and no longer used
     profile = quality_profile()
     video, encoder = video_encoding(ffmpeg_bin, force_cpu)
-    cmd = [ffmpeg_bin, "-i", url, "-t", str(duration_min*60)] + video
+    cmd = [ffmpeg_bin] + iptv.input_args(url) + ["-i", url, "-t", str(duration_min*60)] + video
     if record_format == "mp4":
         # Fragmented MP4: a recording cut off by a crash or restart still plays up to that point
         # (a regular MP4 writes its index last and is unplayable without it), and there's no

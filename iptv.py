@@ -23,6 +23,14 @@ def is_iptv(box):
     return str(box or '').startswith('iptv:')
 
 
+def input_args(url):
+    """ffmpeg options to go before -i url. FAST channels (Samsung TV Plus on amagi.tv, say) splice
+    in ad segments whose URLs don't end in .ts, which ffmpeg 7.1+ refuses ("is not in
+    allowed_segment_extensions"). The option belongs to ffmpeg's HLS reader and is an error for
+    any other input (the HDHomeRun's transport stream), so only HLS playlists get it."""
+    return ['-extension_picky', '0'] if '.m3u8' in str(url or '').lower() else []
+
+
 def load(location, timeout=30):
     if re.match(r'^https?://', location, re.I):
         r = requests.get(location, timeout=timeout, headers={'User-Agent': 'LineDrive'})

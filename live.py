@@ -12,6 +12,8 @@ import threading
 import time
 import uuid
 
+import iptv
+
 SEGMENT_SECONDS = 2
 PLAYLIST_SEGMENTS = 6  # what the playlist lists; older segments are deleted
 IDLE_SECONDS = 75  # no heartbeat for this long: the viewer has gone (a background tab may only get to send one a minute)
@@ -52,7 +54,7 @@ class LiveTV:
 
     @staticmethod
     def command(ffmpeg, url, video_args, folder):
-        return [ffmpeg, '-hide_banner', '-loglevel', 'error', '-i', url,
+        return [ffmpeg, '-hide_banner', '-loglevel', 'error'] + iptv.input_args(url) + ['-i', url,
                 '-map', '0:v:0', '-map', '0:a:0?'] + list(video_args) + [
                 '-force_key_frames', f'expr:gte(t,n_forced*{SEGMENT_SECONDS})',
                 '-c:a', 'aac', '-b:a', '128k', '-ac', '2',
