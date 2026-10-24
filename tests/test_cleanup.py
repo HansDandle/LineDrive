@@ -51,8 +51,37 @@ def test_recycle_and_purge(tmp_path):
     assert not (root / "TV" / "Jeopardy!").exists()           # empty show folder removed...
     assert (root / "TV").exists()                             # ...but not TV itself
     assert cleanup.purge_recycled(str(root)) == 0             # just deleted: kept for now
+    assert cleanup.purge_recycled(str(root), days=30, now=time.time() + 8 * 86400) == 0  # kept longer
     assert cleanup.purge_recycled(str(root), now=time.time() + 8 * 86400) == 3
     assert os.listdir(root / ".deleted") == [".ignore"]
+
+
+def test_recycle_days_setting(tmp_path):
+    assert cleanup.recycle_days(None) == cleanup.RECYCLE_DAYS
+    assert cleanup.recycle_days("x") == cleanup.RECYCLE_DAYS
+    assert cleanup.recycle_days("2") == 2
+    assert cleanup.recycle_days(-1) == 0
+    assert "for 1 day" in cleanup.recycle_note(1) and "right away" in cleanup.recycle_note(0)
+    # 0 empties the folder at once, even a file deleted this very moment
+    video = tmp_path / "TV" / "Show" / "Show - S01E01.mp4"
+    video.parent.mkdir(parents=True)
+    video.write_text("x")
+    cleanup.recycle(str(video), str(tmp_path))
+    assert cleanup.purge_recycled(str(tmp_path), days=0) == 1
+
+
+def test_recycle_days_saved_from_settings(dvr, monkeypatch):
+    import copy
+    monkeypatch.setattr(dvr.config, "config", copy.deepcopy(dvr.config.config))
+    monkeypatch.setattr(dvr.config, "save_config", lambda: None)
+    monkeypatch.setattr(dvr, "_restart_soon", lambda: None)
+    client = dvr.app.test_client()
+    assert dvr.recycle_days() == cleanup.RECYCLE_DAYS                   # not set: a week
+    r = client.post("/api/setup/save", json={"hdhr_ip": "192.168.1.50", "recycle_days": "0"})
+    assert r.status_code == 200 and dvr.recycle_days() == 0
+    assert 'id="recycleDays" value="0"' in client.get("/setup").get_data(as_text=True)
+    client.post("/api/setup/save", json={"hdhr_ip": "192.168.1.50", "recycle_days": ""})  # left empty: unchanged
+    assert dvr.recycle_days() == 0
 
 
 def test_run_cleanup_only_touches_its_own_recordings(dvr, monkeypatch):

@@ -3,7 +3,8 @@
 A series rule's `keep` setting says how many of its recordings to keep: 'last:5' (the newest five),
 'days:14' (two weeks after recording), 'watched:2' (two days after it's watched in Jellyfin) or
 'all'. LineDrive only ever removes files it recorded itself, as listed in its ledger, and removed
-files go to <recordings>/.deleted/ first, where they're purged after RECYCLE_DAYS.
+files go to <recordings>/.deleted/ first, where they're purged after recording.recycle_days
+(RECYCLE_DAYS unless set; 0 deletes them right away). Comskip's uncut originals wait there too.
 """
 import os
 import shutil
@@ -122,10 +123,26 @@ def recycle(video_path, root, keep_sidecars=False):
     return moved
 
 
+def recycle_days(value):
+    """recording.recycle_days as a whole number of days: RECYCLE_DAYS when unset or malformed"""
+    try:
+        return max(0, min(365, int(value)))
+    except (TypeError, ValueError):
+        return RECYCLE_DAYS
+
+
+def recycle_note(days):
+    """How long removed files are kept, for messages: 'stay in the .deleted folder for 7 days'"""
+    if days <= 0:
+        return 'are deleted right away'
+    return f"stay in the {RECYCLE_DIR} folder for {days} day{'' if days == 1 else 's'}"
+
+
 def purge_recycled(root, days=RECYCLE_DAYS, now=None):
-    """Permanently delete files that have been in root/.deleted/ longer than `days`. Returns how many."""
+    """Permanently delete files that have been in root/.deleted/ longer than `days` (0: all of
+    them). Returns how many."""
     bin_dir = os.path.join(root, RECYCLE_DIR)
-    cutoff = (now or time.time()) - days * 86400
+    cutoff = (now or time.time()) - days * 86400 if days > 0 else float('inf')
     removed = 0
     for folder, dirs, names in os.walk(bin_dir, topdown=False):
         for name in names:

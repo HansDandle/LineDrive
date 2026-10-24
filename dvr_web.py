@@ -1619,6 +1619,10 @@ COMSKIP_STATUS = {'current': None, 'waiting': 0}
 def comskip_bin():
     return shutil.which('comskip')
 
+def recycle_days():
+    """How long <recordings>/.deleted keeps removed recordings and uncut originals (recording.recycle_days)"""
+    return cleanup.recycle_days(config.get('recording', 'recycle_days', cleanup.RECYCLE_DAYS))
+
 def queue_comskip(filepath):
     """Mark a finished recording's ad breaks in the background. False if Comskip isn't installed."""
     global COMSKIP_QUEUE
@@ -1645,11 +1649,13 @@ def _comskip_worker():
                 breaks, _ = comskip.find_breaks(path, comskip_bin(), config.get('recording', 'comskip_ini', '') or None)
                 cut = None
                 if breaks and config.get('recording', 'comskip_mode', 'chapters') == 'cut':
+                    days = recycle_days()
+                    keep = (lambda p: cleanup.recycle(p, SAVE_DIR, keep_sidecars=True)) if days else None
                     try:
-                        cut = comskip.cut_ads(path, breaks, ffmpeg_bin, ffprobe_bin,
-                                              keep_original=lambda p: cleanup.recycle(p, SAVE_DIR, keep_sidecars=True))
-                        print(f"[Comskip] {name}: cut {len(breaks)} ad break(s), {cut / 60:.1f} min; the uncut "
-                              f"original is in {cleanup.RECYCLE_DIR} for {cleanup.RECYCLE_DAYS} days")
+                        cut = comskip.cut_ads(path, breaks, ffmpeg_bin, ffprobe_bin, keep_original=keep)
+                        print(f"[Comskip] {name}: cut {len(breaks)} ad break(s), {cut / 60:.1f} min; " +
+                              (f"the uncut original is in {cleanup.RECYCLE_DIR} for {days} days" if days
+                               else "the uncut original wasn't kept"))
                     except RuntimeError as e:
                         print(f"[Comskip] {name}: {e}; marking chapters instead")
                 if cut is None:
@@ -1878,9 +1884,10 @@ def run_cleanup(now=None):
                     e['deleted_at'] = now.isoformat()
                     removed.append((rules[rid], e))
             _save_ledger(entries)
-    purged = cleanup.purge_recycled(SAVE_DIR)
+    days = recycle_days()
+    purged = cleanup.purge_recycled(SAVE_DIR, days)
     if purged:
-        print(f"[Cleanup] Emptied {purged} file(s) older than {cleanup.RECYCLE_DAYS} days from {cleanup.RECYCLE_DIR}")
+        print(f"[Cleanup] Emptied {purged} file(s) older than {days} days from {cleanup.RECYCLE_DIR}")
     if removed:
         _LIBRARY_CACHE['at'] = 0
         by_rule = {}
@@ -1891,9 +1898,11 @@ def run_cleanup(now=None):
             one = len(gone) == 1
             print(f"[Cleanup] {rule.get('title')}: removed {', '.join(e['file'] for e in gone)} ({label})")
             NOTICES.append({'message': f"Cleaned up {'1 recording' if one else f'{len(gone)} recordings'} of "
-                                       f"{rule.get('title')} ({label}). {'It stays' if one else 'They stay'} in the "
-                                       f"{cleanup.RECYCLE_DIR} folder for {cleanup.RECYCLE_DAYS} days if you want "
-                                       f"{'it' if one else 'them'} back.", 'at': now.isoformat()})
+                                       f"{rule.get('title')} ({label})." +
+                                       (f" {'It stays' if one else 'They stay'} in the {cleanup.RECYCLE_DIR} folder "
+                                        f"for {days} day{'' if days == 1 else 's'} if you want "
+                                        f"{'it' if one else 'them'} back." if days else ''),
+                            'at': now.isoformat()})
             del NOTICES[:-5]
             notify_jellyfin(os.path.join(SAVE_DIR, gone[0]['file']))
     return removed
@@ -4579,7 +4588,7 @@ def api_rule_options(job_id):
         job.pop('retention_weeks', None)
         said.append(cleanup.keep_label(keep).lower())
         if keep != 'all':
-            said.append(f"removed recordings stay in the {cleanup.RECYCLE_DIR} folder for {cleanup.RECYCLE_DAYS} days")
+            said.append(f"removed recordings {cleanup.recycle_note(recycle_days())}")
     save_schedule()
     if 'keep' in data and job['keep'] != 'all':
         run_threaded(_cleanup_safely)
@@ -5316,6 +5325,7 @@ def setup_page():
         'nfo': bool(config.get('recording', 'nfo', True)),
         'comskip': bool(config.get('recording', 'comskip', False)),
         'comskip_mode': config.get('recording', 'comskip_mode', 'chapters') or 'chapters',
+        'recycle_days': recycle_days(),
         'encoder': config.get('recording', 'encoder', 'cpu') or 'cpu',
     }
     return render_template('setup.html', settings=settings, first_run=not config.is_configured(),
@@ -5534,6 +5544,8 @@ def api_setup_save():
         c.setdefault('recording', {})['encoder'] = data['encoder']
     if data.get('comskip_mode') in ('chapters', 'cut'):
         c.setdefault('recording', {})['comskip_mode'] = data['comskip_mode']
+    if str(data.get('recycle_days', '')).strip().isdigit():
+        c.setdefault('recording', {})['recycle_days'] = cleanup.recycle_days(data['recycle_days'])
     c.setdefault('guide', {})['distant_channels'] = [str(m) for m in data.get('distant_channels', []) if str(m).isdigit()]
     if 'hidden_channels' in data:
         c['guide']['hidden_channels'] = [str(n) for n in data['hidden_channels'] if str(n).strip()]

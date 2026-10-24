@@ -125,11 +125,16 @@
                     {% if comskip_available %}
                     <label class="check"><input type="radio" name="comskipMode" value="chapters"{% if settings.comskip_mode != 'cut' %} checked{% endif %} /><span>Mark them as chapters <span class="muted small">(Jellyfin, Kodi; the video isn't changed)</span></span></label>
                     <label class="check"><input type="radio" name="comskipMode" value="cut"{% if settings.comskip_mode == 'cut' %} checked{% endif %} /><span>Cut them out <span class="muted small">(works everywhere, including Plex)</span></span></label>
-                    <p class="field-note">Comskip runs after each recording; it takes a few minutes per show and uses the CPU, and the recording appears in Jellyfin once it's done. <strong>Chapters:</strong> in Jellyfin 10.10+, the Chapter Segments plugin makes the “Commercial” chapters skippable; Kodi skips them from the .edl; Plex and Emby show the chapters to jump past. <strong>Cut:</strong> Comskip sometimes takes a scene for an ad, and a cut can't be put back, so the uncut original is kept in the recordings' <code>.deleted</code> folder for 7 days (move it back to restore it). Cuts are made on keyframes, so a second of ad may stay in, and a recording where Comskip's answer looks wrong gets chapters instead.</p>
+                    <p class="field-note">Comskip runs after each recording; it takes a few minutes per show and uses the CPU, and the recording appears in Jellyfin once it's done. <strong>Chapters:</strong> in Jellyfin 10.10+, the Chapter Segments plugin makes the “Commercial” chapters skippable; Kodi skips them from the .edl; Plex and Emby show the chapters to jump past. <strong>Cut:</strong> Comskip sometimes takes a scene for an ad, and a cut can't be put back, so the uncut original is kept in the recordings' <code>.deleted</code> folder for as long as <strong>Keep deleted recordings</strong> says below (move it back to restore it). Cuts are made on keyframes, so a second of ad may stay in, and a recording where Comskip's answer looks wrong gets chapters instead.</p>
                     {% else %}
                     <p class="field-note">Comskip isn't installed. The Docker image includes it; otherwise install it and put <code>comskip</code> on the PATH.</p>
                     {% endif %}
                 </fieldset>
+                <div class="field">
+                    <label for="recycleDays">Keep deleted recordings</label>
+                    <div class="with-suffix"><input type="number" id="recycleDays" value="{{ settings.recycle_days }}" min="0" max="365" inputmode="numeric" /><span>days</span></div>
+                    <p class="field-note">Recordings a series' keep setting removes, and the uncut originals of recordings Comskip cuts, wait in the recordings' <code>.deleted</code> folder this long so a mistake can be undone. <strong>0</strong> deletes them right away, which saves the most space.</p>
+                </div>
                 {% if in_docker %}
                 <p class="muted">Recordings are saved to <code>/recordings</code> in the container. Map it to a folder on your server in <code>docker-compose.yml</code>.</p>
                 {% else %}

@@ -302,6 +302,7 @@
       quality: v('quality'), encoder: v('encoder'),
       captions: $('captions').checked, nfo: $('nfo').checked, comskip: $('comskip').checked,
       comskip_mode: document.querySelector('input[name="comskipMode"]:checked') ? document.querySelector('input[name="comskipMode"]:checked').value : undefined,
+      recycle_days: v('recycleDays'),
       // Only once the tuner's stations are listed, so a tuner that didn't answer doesn't clear them
       distant_channels: stations.length ? Array.from(stationState().distant) : undefined,
       hidden_channels: stations.length ? Array.from(stationState().hidden) : undefined,

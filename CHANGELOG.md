@@ -5,6 +5,11 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.1] - 2026-10-24
+
+### Added
+- **Keep deleted recordings** (Settings → Recording, `recording.recycle_days`, default 7): how many days recordings removed by a series' keep setting, and the uncut originals of Comskip cuts, wait in `<recordings>/.deleted/`. 0 deletes them right away (a cut recording's original isn't kept at all). Lowering it empties the older files at the next hourly clean-up.
+
 ## [4.2.0] - 2026-10-24
 
 ### Added

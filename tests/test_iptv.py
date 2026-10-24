@@ -49,3 +49,27 @@ def test_an_iptv_source_is_a_box_whose_tuners_are_its_streams(dvr, monkeypatch):
     assert [s["VctNumber"] for s in status] == ["1001", ""]
     assert dvr.stream_url(box, "1001") == "http://iptv.example/live/news.m3u8"
     assert dvr.stream_url("192.168.1.50", "24.1") == "http://192.168.1.50:5004/auto/v24.1"
+
+
+def test_a_recording_takes_the_only_stream_from_live_tv(dvr, monkeypatch, tmp_path):
+    """One login, one stream: someone watching an IPTV channel in LineDrive is stopped so a
+    recording on another of the provider's channels can start, never two streams at once."""
+    import live
+    from test_live import FakeProc
+    box = "iptv:Provider"
+    monkeypatch.setattr(dvr, "IPTV_LIMITS", {box: 1})
+    monkeypatch.setattr(dvr, "IPTV_URLS", {"1001": "http://iptv.example/news", "1002": "http://iptv.example/sports"})
+    monkeypatch.setattr(dvr, "ALL_BOXES", [box])
+    monkeypatch.setattr(dvr, "BOX_TUNERS", {})
+    monkeypatch.setattr(dvr, "ACTIVE_RECORDINGS", {})
+    for num, name in (("1001", "News 24"), ("1002", "Sports Live")):
+        monkeypatch.setitem(dvr.channels, num, name)
+        monkeypatch.setitem(dvr.CHANNEL_BOXES, num, [box])
+    tv = live.LiveTV(str(tmp_path / "live"), popen=FakeProc)
+    monkeypatch.setattr(dvr, "LIVE", tv)
+    monkeypatch.setattr(dvr.t, "sleep", lambda s: None)
+    watching = tv.start("1001", box, dvr.IPTV_URLS["1001"], "ffmpeg", [], 2)
+    assert "IPTV provider's stream is in use" in dvr.no_tuner_message("1002")
+    assert dvr.make_room("1002", "The Game") is None       # free now
+    assert watching.proc.terminated and not tv.sessions
+    assert "record The Game" in tv.ended[watching.id][0]  # what the viewer's player is told
