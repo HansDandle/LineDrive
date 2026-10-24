@@ -517,6 +517,7 @@ from version import __version__
 import shutil
 import cleanup
 import comskip
+import encoders
 import sonarr
 
 @app.context_processor
@@ -1236,22 +1237,42 @@ def skip_reason(job, slot):
 # Config recording.quality. Sizes measured on a 1080i network broadcast; 720p stations run smaller.
 # The 720p profile deinterlaces first (bwdif only touches interlaced frames), since scaling
 # interlaced video leaves combing on motion.
+# crf: libx264's quality number; encoders.video_args turns it into the chosen encoder's settings
 QUALITY_PROFILES = {
-    'best':     {'label': 'Best (about 3.5 GB per hour)',
-                 'video': ['-c:v', 'libx264', '-preset', 'fast', '-crf', '21']},
-    'standard': {'label': 'Standard (about 2.5 GB per hour)',
-                 'video': ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23']},
-    'smaller':  {'label': 'Smaller (about 1.8 GB per hour)',
-                 'video': ['-c:v', 'libx264', '-preset', 'fast', '-crf', '26']},
-    '720p':     {'label': '720p (about 0.9 GB per hour, lightest on the CPU)',
-                 'video': ['-vf', 'bwdif=mode=send_frame:deint=interlaced,scale=-2:720',
-                           '-c:v', 'libx264', '-preset', 'fast', '-crf', '23']},
+    'best':     {'label': 'Best (about 3.5 GB per hour)', 'crf': 21},
+    'standard': {'label': 'Standard (about 2.5 GB per hour)', 'crf': 23},
+    'smaller':  {'label': 'Smaller (about 1.8 GB per hour)', 'crf': 26},
+    '720p':     {'label': '720p (about 0.9 GB per hour, lightest on the CPU)', 'crf': 23,
+                 'vf': encoders.DEINTERLACE_720P},
     'original': {'label': 'Original broadcast (about 5 GB per hour, no conversion, .ts files)',
                  'video': ['-c:v', 'copy'], 'audio': ['-c:a', 'copy'], 'ts': True},
 }
 
 def quality_profile():
     return QUALITY_PROFILES.get(config.get('recording', 'quality', 'standard'), QUALITY_PROFILES['standard'])
+
+_ENCODER_WARNED = set()
+
+def video_encoding(ffmpeg_bin, force_cpu=False):
+    """(ffmpeg video arguments, encoder) for a recording: Settings -> Recording quality, encoded by
+    recording.encoder (cpu / nvenc / qsv / vaapi, with recording.vaapi_device), falling back to
+    the CPU when the graphics card encoder doesn't work here. encoder is None for Original."""
+    profile = quality_profile()
+    if 'video' in profile:
+        return profile['video'], None
+    device = config.get('recording', 'vaapi_device', '') or None
+    encoder, problem = 'cpu', None
+    if not force_cpu:
+        encoder, problem = encoders.choose(config.get('recording', 'encoder', 'cpu'), ffmpeg_bin, device)
+    if problem:
+        print(f"[Recording] {problem}")
+        if problem not in _ENCODER_WARNED:  # say it once on the home page, not every recording
+            _ENCODER_WARNED.add(problem)
+            NOTICES.append({'message': problem + '.', 'at': datetime.now().isoformat()})
+    return encoders.video_args(encoder, profile['crf'], profile.get('vf'), device), encoder
+
+# A failed recording whose reason is one of these is the tuner's or the disk's fault, not the encoder's
+NOT_ENCODER_FAILURES = ('No free tuner', 'The tuner doesn', 'Couldn’t reach', 'The recordings drive')
 
 SPORTS_LOOKBACK = timedelta(hours=3)
 
@@ -1730,10 +1751,13 @@ def _load_active():
     except (OSError, ValueError):
         return []
 
-def _record_to_file(channel_key, duration_min, crf, preset, record_format, started_at, filepath, url):
+def _record_to_file(channel_key, duration_min, crf, preset, record_format, started_at, filepath, url,
+                    force_cpu=False):
+    """force_cpu: the graphics card encoder failed partway; record the rest on the CPU"""
     global current_process, stop_event
 
     stop_event.clear()
+    began = datetime.now()
 
     # Determine ffmpeg binary: prefer configured path, fallback to system ffmpeg
     ffmpeg_bin = FFMPEG_PATH if os.path.exists(FFMPEG_PATH) else "ffmpeg"
@@ -1741,7 +1765,8 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
     # Settings -> Recording quality (recording.quality) decides the encoding for every recording;
     # the crf/preset a schedule entry carries are from older versions and no longer used
     profile = quality_profile()
-    cmd = [ffmpeg_bin, "-i", url, "-t", str(duration_min*60)] + profile['video']
+    video, encoder = video_encoding(ffmpeg_bin, force_cpu)
+    cmd = [ffmpeg_bin, "-i", url, "-t", str(duration_min*60)] + video
     if record_format == "mp4":
         # Fragmented MP4: a recording cut off by a crash or restart still plays up to that point
         # (a regular MP4 writes its index last and is unplayable without it), and there's no
@@ -1801,6 +1826,26 @@ def _record_to_file(channel_key, duration_min, crf, preset, record_format, start
         print(f"[Recording] Saved captions: {os.path.basename(captions.path)}")
     failed = proc.returncode != 0 and not stopped
     reason = _explain_ffmpeg_failure(tail) if failed else None
+    # A graphics card encoder can fail on a live stream even after passing its test encode. Record
+    # the rest on the CPU rather than lose the show, and stop using that encoder until it's
+    # re-tested in Settings or LineDrive restarts.
+    left = duration_min * 60 - (datetime.now() - began).total_seconds()
+    if failed and encoder not in (None, 'cpu') and not reason.startswith(NOT_ENCODER_FAILURES) and left > 30:
+        encoders.mark_broken(encoder, config.get('recording', 'vaapi_device', '') or None,
+                             f"failed during a recording: {reason}")
+        try:
+            empty = os.path.getsize(filepath) < 1024 * 1024
+        except OSError:
+            empty = True
+        target = filepath if empty else _unique_path(os.path.dirname(filepath), os.path.splitext(
+            os.path.basename(filepath))[0] + ' (part 2)', os.path.splitext(filepath)[1])
+        message = (f"{encoders.ENCODERS[encoder]} failed while recording ({reason}); "
+                   f"{'recorded it' if empty else 'recorded the rest as ' + repr(os.path.basename(target))} "
+                   f"on the CPU, and recordings use the CPU until it passes Test in Settings.")
+        print(f"[Recording] {message}")
+        NOTICES.append({'message': message, 'at': datetime.now().isoformat()})
+        return _record_to_file(channel_key, left / 60, crf, preset, record_format, started_at, target, url,
+                               force_cpu=True)
     # Attempt to mark matching scheduled job as completed (or failed); when stopped for a
     # restart it stays 'recording' so the restarted LineDrive resumes it
     try:
@@ -4962,9 +5007,10 @@ def setup_page():
         'nfo': bool(config.get('recording', 'nfo', True)),
         'comskip': bool(config.get('recording', 'comskip', False)),
         'comskip_mode': config.get('recording', 'comskip_mode', 'chapters') or 'chapters',
+        'encoder': config.get('recording', 'encoder', 'cpu') or 'cpu',
     }
     return render_template('setup.html', settings=settings, first_run=not config.is_configured(),
-                           comskip_available=bool(comskip_bin()),
+                           comskip_available=bool(comskip_bin()), encoder_choices=list(encoders.ENCODERS.items()),
                            qualities=[(k, p['label']) for k, p in QUALITY_PROFILES.items()],
                            in_docker=IN_DOCKER, cache_bust=str(int(time.time())))
 
@@ -5042,6 +5088,19 @@ def api_setup_test():
             r = requests.get(data['url'].rstrip('/') + '/api/v1/settings/main', headers={'X-Api-Key': data.get('api_key', '')}, timeout=10)
             return jsonify({'ok': r.ok, 'message': 'Connected to Jellyseerr' if r.ok
                             else f"Jellyseerr said HTTP {r.status_code} (check the API key)"})
+        if kind == 'encoder':
+            # Try every encoder (fresh, not cached) so the person sees what this machine can do
+            ffmpeg_bin = FFMPEG_PATH if os.path.exists(FFMPEG_PATH) else 'ffmpeg'
+            device = config.get('recording', 'vaapi_device', '') or None
+            results = {k: encoders.probe(k, ffmpeg_bin, device, fresh=True) for k in encoders.ENCODERS}
+            chosen = str(data.get('encoder') or 'cpu')
+            working = [encoders.ENCODERS[k] for k, (ok, _) in results.items() if ok and k != 'cpu']
+            ok, reason = results.get(chosen, (False, 'unknown encoder'))
+            message = (f"{encoders.ENCODERS.get(chosen, chosen)} works." if ok
+                       else f"{encoders.ENCODERS.get(chosen, chosen)} doesn't work here: {reason}.")
+            message += (f" Graphics encoders that work: {', '.join(working)}." if working
+                        else " No graphics card encoder works here, so recordings use the CPU.")
+            return jsonify({'ok': ok, 'message': message})
         if kind == 'sonarr':
             info = sonarr.Sonarr(data['url'], data.get('api_key', '')).status()
             return jsonify({'ok': True, 'message': f"Connected to Sonarr {info.get('version')}"})
@@ -5116,6 +5175,8 @@ def api_setup_save():
     for key in ('captions', 'nfo', 'comskip'):
         if isinstance(data.get(key), bool):
             c.setdefault('recording', {})[key] = data[key]
+    if data.get('encoder') in encoders.ENCODERS:
+        c.setdefault('recording', {})['encoder'] = data['encoder']
     if data.get('comskip_mode') in ('chapters', 'cut'):
         c.setdefault('recording', {})['comskip_mode'] = data['comskip_mode']
     c.setdefault('guide', {})['distant_channels'] = [str(m) for m in data.get('distant_channels', []) if str(m).isdigit()]

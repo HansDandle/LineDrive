@@ -17,9 +17,14 @@ LABEL org.opencontainers.image.title="LineDrive" \
       org.opencontainers.image.source="https://github.com/HansDandle/LineDrive" \
       org.opencontainers.image.licenses="MIT"
 
-# ffmpeg records and encodes the tuner streams; tzdata makes TZ work
+# ffmpeg records and encodes the tuner streams; tzdata makes TZ work. The VAAPI/Quick Sync drivers
+# let a graphics card passed into the container (/dev/dri) do the encoding (Settings -> Encode
+# with); Intel's only exist for x86. NVIDIA's come from the host with the NVIDIA Container Toolkit.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg tzdata libargtable2-0 \
+    && apt-get install -y --no-install-recommends ffmpeg tzdata libargtable2-0 mesa-va-drivers \
+    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+         apt-get install -y --no-install-recommends intel-media-va-driver i965-va-driver libvpl2 libmfx-gen1.2; \
+       fi \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=comskip /usr/local/bin/comskip /usr/local/bin/comskip
 

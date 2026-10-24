@@ -20,13 +20,15 @@
   },
   "recording": {
     "quality": "standard",
+    "encoder": "cpu",
+    "vaapi_device": "",
     "sports_overrun_minutes": 30,
     "captions": true,
     "nfo": true,
     "comskip": false,
     "comskip_mode": "chapters",
     "comskip_ini": "",
-    "comment": "quality: best | standard | smaller | 720p | original (see Settings for sizes). sports_overrun_minutes: extra minutes added to a recording when live sports aired on the same channel in the 3 hours before it (games run long and push later shows back); 0 turns it off. captions: save the broadcast's closed captions as <recording>.en.srt beside the video. nfo: save a .nfo with the plot, air date, season and episode beside the video (Jellyfin, Emby and Kodi read it). comskip: after each recording, find the ad breaks (needs Comskip; the Docker image has it). comskip_mode: chapters (mark them as chapters plus a .edl; the video isn't changed) or cut (cut them out; the uncut original stays in <recordings>/.deleted for 7 days). comskip_ini: your own comskip.ini instead of the one shipped with LineDrive."
+    "comment": "quality: best | standard | smaller | 720p | original (see Settings for sizes). encoder: cpu | nvenc | qsv | vaapi (a graphics card that doesn't work falls back to cpu). vaapi_device: the card for vaapi, default /dev/dri/renderD128. sports_overrun_minutes: extra minutes added to a recording when live sports aired on the same channel in the 3 hours before it (games run long and push later shows back); 0 turns it off. captions: save the broadcast's closed captions as <recording>.en.srt beside the video. nfo: save a .nfo with the plot, air date, season and episode beside the video (Jellyfin, Emby and Kodi read it). comskip: after each recording, find the ad breaks (needs Comskip; the Docker image has it). comskip_mode: chapters (mark them as chapters plus a .edl; the video isn't changed) or cut (cut them out; the uncut original stays in <recordings>/.deleted for 7 days). comskip_ini: your own comskip.ini instead of the one shipped with LineDrive."
   },
   "web_interface": {
     "host": "0.0.0.0",

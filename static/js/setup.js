@@ -274,7 +274,7 @@
     const v = (id) => ($(id) ? $(id).value.trim() : '');
     return {
       hdhr_ip: v('hdhrIp'), zip_code: v('zipCode'), timezone: tzSelect.value, recordings: v('recordings'),
-      quality: v('quality'),
+      quality: v('quality'), encoder: v('encoder'),
       captions: $('captions').checked, nfo: $('nfo').checked, comskip: $('comskip').checked,
       comskip_mode: document.querySelector('input[name="comskipMode"]:checked') ? document.querySelector('input[name="comskipMode"]:checked').value : undefined,
       // Only once the tuner's stations are listed, so a tuner that didn't answer doesn't clear them
@@ -292,7 +292,8 @@
       const kind = btn.dataset.kind;
       const out = document.querySelector('[data-result="' + kind + '"]');
       const all = values();
-      const body = kind === 'zip' ? { zip_code: all.zip_code } : all[kind];
+      const body = kind === 'zip' ? { zip_code: all.zip_code }
+        : kind === 'encoder' ? { encoder: all.encoder } : all[kind];
       out.textContent = 'Testing…';
       out.className = 'field-note';
       btn.disabled = true;

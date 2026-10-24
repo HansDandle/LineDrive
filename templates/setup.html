@@ -93,6 +93,17 @@
                     </select>
                     <p class="field-note">Sizes are for full-HD (1080) stations; 720p stations like ABC and FOX come out smaller. 720p looks close to Standard on most TVs at a third of the size, and uses much less CPU, which helps when several shows record at once. Original keeps the broadcast untouched.</p>
                 </div>
+                <div class="field">
+                    <label for="encoder">Encode with</label>
+                    <select id="encoder">
+                        {% for key, label in encoder_choices %}
+                        <option value="{{ key }}"{% if key == settings.encoder %} selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="button" class="btn btn-sm test-btn" data-kind="encoder">Test</button>
+                    <p class="field-note" data-result="encoder"></p>
+                    <p class="field-note">A graphics card takes the encoding off the CPU, so several shows can record at once on a small PC. Sizes come out close to the ones above, not exactly. If the card doesn't work here, recordings use the CPU and the home page says so. In Docker the card has to be passed into the container; see the README.</p>
+                </div>
                 <fieldset class="field">
                     <legend>Extra files beside each recording</legend>
                     <label class="check"><input type="checkbox" id="captions"{% if settings.captions %} checked{% endif %} /><span>Closed captions as subtitles <span class="muted small">(.srt)</span></span></label>

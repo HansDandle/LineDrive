@@ -122,6 +122,7 @@ Everything is on the **Settings** page (gear icon). It writes `config.json` in t
 | HDHomeRun | Found automatically, or type its IP. |
 | ZIP or postal code | US ZIP or Canadian postal code: a week of Gracenote listings. Several, comma-separated, for an antenna that reaches another market. Leave empty elsewhere (SiliconDust's guide, about a day ahead). |
 | Recording quality | Best / Standard / Smaller / 720p / Original. |
+| Encode with | CPU (default), NVIDIA, Intel Quick Sync or VAAPI. See [Graphics card encoding](#graphics-card-encoding). |
 | Time zone | Leave on "this computer's". In Docker, set `TZ`. |
 | Recordings folder | `/recordings` in Docker. |
 | Stations | Tick **Out of market** for another city's stations your antenna also receives, **Hide** to leave a station out of the guide. Saved as you tick. |
@@ -129,6 +130,32 @@ Everything is on the **Settings** page (gear icon). It writes `config.json` in t
 | Jellyseerr | URL + API key (Settings → General). |
 | Sonarr | URL + API key (Settings → General). After an episode records, LineDrive unmonitors it in Sonarr. Only that episode's monitored flag changes; Sonarr doesn't need to see the recordings folder. Movies and sports are skipped. |
 | Home Assistant | Your MQTT broker. The LineDrive device appears on its own. |
+
+### Graphics card encoding
+
+Recordings are converted to H.264 on the CPU unless you pick a graphics card under **Settings → Recordings → Encode with**. A card takes that load off the CPU, which matters when several shows record at once on a small PC. Press **Test** to see which encoders work on your machine. If the one you picked doesn't, recordings use the CPU and the home page says why. If a card fails partway through a recording, LineDrive records the rest on the CPU (as a `(part 2)` file if some was already saved) and stops using the card until it passes **Test** again.
+
+In Docker the card has to be passed into the container:
+
+```yaml
+services:
+  linedrive:
+    # Intel (Quick Sync or VAAPI) or AMD (VAAPI), Linux hosts:
+    devices:
+      - /dev/dri:/dev/dri
+    # NVIDIA: install the NVIDIA Container Toolkit on the host, then:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu, video]
+```
+
+The image includes the Intel and AMD drivers (Intel's on x86 only). For a card other than the first, set `recording.vaapi_device` (e.g. `/dev/dri/renderD129`). Docker Desktop on Windows and macOS can't pass an Intel or AMD card through, so use the CPU there (NVIDIA works on Windows with WSL 2 GPU support). File sizes come out close to the quality setting's, not exactly.
+
+Graphics-card encoding is new and has only been tried on one Intel machine so far, where Quick Sync passed **Test** but sometimes failed on a live broadcast (the CPU fallback above is the result). If you try it, please open an issue with your card, your OS and what **Test** said.
 
 ### Jellyfin / Plex
 
@@ -179,6 +206,7 @@ The tests use a fixed week of real listings (`tests/fixtures/guide_sample.json`)
 | `media_requests.py` | Jellyseerr requests |
 | `sonarr.py` | Sonarr handoff (unmonitor recorded episodes) |
 | `comskip.py`, `comskip.ini` | commercial marking (chapters + .edl) |
+| `encoders.py` | CPU and graphics card video encoders, with tests and fallback |
 | `mqtt_bridge.py` | Home Assistant integration |
 
 ## Legal

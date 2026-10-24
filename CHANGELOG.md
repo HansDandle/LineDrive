@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] (4.0.0)
 
 ### Added
+- Graphics card encoding ([#1](https://github.com/HansDandle/LineDrive/issues/1)): Settings → Recordings → **Encode with** CPU (default), NVIDIA (NVENC), Intel Quick Sync or VAAPI (Intel/AMD on Linux). Each quality setting maps to the card's closest equivalent.
+  - **Test** tries every encoder and says which work here, and why the others don't ("Cannot load libcuda.so.1", "/dev/dri/renderD128 not found", ...).
+  - A card that doesn't work falls back to the CPU, with a note on the home page. One that fails partway through a live recording (some cards reject odd frames at the start of a broadcast) hands the rest of the show to the CPU, as a `(part 2)` file if some was already saved, and isn't used again until it passes **Test**.
+  - The Docker image includes the VAAPI and Quick Sync drivers (Intel's on x86 only). Pass `/dev/dri` into the container for Intel/AMD, or use the NVIDIA Container Toolkit; see the README.
+  - New options: `recording.encoder`, `recording.vaapi_device`.
 - Sonarr handoff: Settings → Integrations → Sonarr (URL + API key). When an episode finishes recording, LineDrive finds it in Sonarr and unmonitors it, so Sonarr doesn't download the same episode. The home page says when it did.
   - Episodes are matched by season and episode number, else by the date it aired, else by episode title. A number or date match whose episode title disagrees is ignored, so a rerun of an older show with the same name (the original *Scrubs* vs. the revival) is never mistaken for the new one.
   - Only the episode's monitored flag changes. Nothing is imported, moved or deleted, and Sonarr doesn't need access to the recordings folder. Shows Sonarr doesn't have, episodes it already has and movies and sports are left alone.

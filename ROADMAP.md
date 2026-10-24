@@ -25,20 +25,23 @@ Pool the tuners of more than one HDHomeRun. Today there's one tuner address, one
 and one tuner count, and the clash checks, recording, signal readings, status card and Home
 Assistant buttons all assume a single box.
 
-### Automatic clash resolution (to evaluate)
-When more recordings overlap than there are tuners, move one to another airing of the same episode
-(a later time or a sister station) or use per-series priorities, as NextPVR does. Today LineDrive
-warns and badges the recording that won't get a tuner.
-
-### Graphics-card encoding
-Recordings are encoded with libx264 on the CPU (except the Original quality). Add NVIDIA NVENC,
-Intel Quick Sync and VAAPI as options ([#1](https://github.com/HansDandle/LineDrive/issues/1)).
+### Graphics-card encoding (done, unreleased)
+NVIDIA NVENC, Intel Quick Sync and VAAPI as alternatives to libx264 on the CPU
+([#1](https://github.com/HansDandle/LineDrive/issues/1)), with a Test button and an automatic CPU
+fallback. Wanted: reports from Linux machines with each kind of card.
 
 ### Live viewer in the guide
 Watch live TV in a side panel of the guide, with picture-in-picture and full screen. Browsers can't
 play the tuner's MPEG-2/AC-3 stream, so ffmpeg transcodes it to H.264/AAC HLS. The hard part is
 the tuner and CPU: one tuner and one transcode per viewer, stopped when the panel closes or the
 viewer goes away, and giving way to scheduled recordings. Shares work with graphics-card encoding.
+
+## Later
+
+### Automatic clash resolution (to evaluate)
+When more recordings overlap than there are tuners, move one to another airing of the same episode
+(a later time or a sister station) or use per-series priorities, as NextPVR does. Today LineDrive
+warns and badges the recording that won't get a tuner.
 
 ## Smaller items for any release
 
