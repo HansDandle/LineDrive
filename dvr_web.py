@@ -624,6 +624,8 @@ def _get_epg_locked():
                 print(f"EPG: fetched {len(fresh)} programs from Gracenote")
             if xmltv:
                 fresh += xmltv_listings(xmltv, {str(p.get('channel_number')) for p in fresh} | set(IPTV_URLS))[0]
+            if config.get('iptv'):
+                load_iptv()  # current stream URLs, and channels the playlists have added
             fresh += iptv_listings()
             if not fresh:
                 print("EPG: fetch returned no programs; keeping previous cache")
@@ -787,21 +789,65 @@ import iptv
 IPTV_URLS = {}    # channel number -> stream URL
 IPTV_LIMITS = {}  # source box id -> streams allowed at once
 IPTV_GUIDES = []  # (XMLTV location, {tvg-id: channel number}, {channel number: name})
-for _source, _box, _guide, _entries in iptv.channels(config.get('iptv', default=[]) or [], set(channels)):
-    IPTV_LIMITS[_box] = max(1, int(_source.get('max_streams') or 1))
-    for _e in _entries:
-        channels[_e['number']] = _e['name']
-        CHANNEL_BOXES[_e['number']] = [_box]
-        IPTV_URLS[_e['number']] = _e['url']
-    if _guide:
-        IPTV_GUIDES.append((_guide, {e['tvg_id']: e['number'] for e in _entries if e['tvg_id']},
-                            {e['number']: e['name'] for e in _entries}))
-    print(f"[IPTV] {_source.get('name') or _box}: {len(_entries)} channels, {IPTV_LIMITS[_box]} at once")
-ALL_BOXES = HDHR_IPS + list(IPTV_LIMITS)
+IPTV_SOURCES = {}  # source box id -> (source, guide, entries) as last read
+IPTV_LOADED = {'at': 0}
+IPTV_LOCK = threading.Lock()
+IPTV_STALE_SECONDS = 30 * 60  # free playlists' stream URLs often carry tokens that expire
+
+def load_iptv():
+    """(Re-)read every IPTV playlist: at startup, with each guide refresh, and before a stream
+    starts from a playlist read over IPTV_STALE_SECONDS ago. Stream URLs change (free and FAST
+    playlists rotate them), so channels get the current ones; a playlist that can't be read
+    this time keeps what it had."""
+    with IPTV_LOCK:
+        old_iptv = set(IPTV_URLS)
+        taken = {n for n in channels if n not in old_iptv}  # the antennas' numbers, as at startup
+        read = {box: (source, guide, entries) for source, box, guide, entries in
+                iptv.channels(config.get('iptv', default=[]) or [], set(taken))}
+        boxes = [iptv.box_id(s) for s in config.get('iptv', default=[]) or [] if isinstance(s, dict) and s.get('m3u')]
+        sources = {b: read.get(b) or IPTV_SOURCES.get(b) for b in boxes}
+        sources = {b: s for b, s in sources.items() if s}
+        urls, names, limits, guides = {}, {}, {}, []
+        for box, (source, guide, entries) in sources.items():
+            limits[box] = max(1, int(source.get('max_streams') or 1))
+            for e in entries:
+                urls[e['number']] = e['url']
+                names[e['number']] = (e['name'], box)
+            if guide:
+                guides.append((guide, {e['tvg_id']: e['number'] for e in entries if e['tvg_id']},
+                               {e['number']: e['name'] for e in entries}))
+            if box not in read:
+                print(f"[IPTV] {source.get('name') or box}: couldn't re-read the playlist; keeping its channels")
+            elif not old_iptv:
+                print(f"[IPTV] {source.get('name') or box}: {len(entries)} channels, {limits[box]} at once")
+        # Changed in place, key by key: other threads read these while a refresh runs
+        for table in (IPTV_URLS, channels, CHANNEL_BOXES):
+            for num in old_iptv - set(urls):
+                table.pop(num, None)
+        for num, (name, box) in names.items():
+            channels[num] = name
+            CHANNEL_BOXES[num] = [box]
+        IPTV_URLS.update(urls)
+        for box in set(IPTV_LIMITS) - set(limits):
+            del IPTV_LIMITS[box]
+        IPTV_LIMITS.update(limits)
+        IPTV_GUIDES[:] = guides
+        IPTV_SOURCES.clear()
+        IPTV_SOURCES.update(sources)
+        ALL_BOXES[:] = HDHR_IPS + list(IPTV_LIMITS)
+        IPTV_LOADED['at'] = time.time()
+
+ALL_BOXES = []
+load_iptv()
 
 def stream_url(box, channel):
-    """Where a box's (or IPTV source's) stream of a channel is"""
-    return IPTV_URLS[str(channel)] if iptv.is_iptv(box) else tuner_pool.stream_url(box, channel)
+    """Where a box's (or IPTV source's) stream of a channel is. An IPTV playlist read a while
+    ago is read again first, so the stream isn't one whose URL has since expired."""
+    if not iptv.is_iptv(box):
+        return tuner_pool.stream_url(box, channel)
+    if time.time() - IPTV_LOADED['at'] > IPTV_STALE_SECONDS:
+        load_iptv()
+    return IPTV_URLS[str(channel)]
 days_list = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
 TUNER_COUNT = None  # from the devices; remembered so a moment they don't answer doesn't hide clashes

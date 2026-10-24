@@ -5,6 +5,11 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.2] - 2026-10-24
+
+### Fixed
+- IPTV playlists are read again with each guide refresh, and before a recording or live stream starts if the playlist was last read over 30 minutes ago. Free and FAST playlists change their stream URLs (or put expiring tokens in them), which made their channels fail until LineDrive restarted. Channels a playlist adds or drops show up too. A playlist that can't be read at the time keeps the channels it had.
+
 ## [4.2.1] - 2026-10-24
 
 ### Added
