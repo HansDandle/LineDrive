@@ -33,4 +33,10 @@ A second copy for experiments shouldn't share a data folder with your real one. 
 
 ## Scope
 
-LineDrive is a DVR for HDHomeRun tuners and over-the-air TV. Features that help record, find, or organize broadcasts fit. Features aimed at acquiring content from other sources don't.
+LineDrive is a DVR for HDHomeRun tuners and over-the-air TV, plus IPTV channels you subscribe to. Features that help record, find, or organize broadcasts fit. Features aimed at acquiring content from other sources (torrents, downloads) don't.
+
+## Other ways to help
+
+Trying new features on hardware LineDrive hasn't been tested on is a big help: a graphics card, several HDHomeRuns, an IPTV provider, or a guide outside the US. Open an issue with what worked and what didn't.
+
+And if LineDrive saves you a DVR subscription, there's a tip jar at [ko-fi.com/hansdandle](https://ko-fi.com/hansdandle). It's never expected; LineDrive stays free.
