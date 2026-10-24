@@ -703,6 +703,12 @@
     if (p.end <= now) {
       actions.append(el('p', 'p-meta', 'This has already aired.'));
     } else {
+      // No tuner for this airing, but another airing of the episode has one
+      const alt = !p.recording_now && p.clash_info && p.clash_info.alternative;
+      if (alt) {
+        actions.append(actionButton('Record ' + alt.label + ' instead', 'The same episode, when a tuner is free', 'primary',
+          () => post('/api/clash/move', { job_id: p.clash_info.job_id, start: p.clash_info.start })));
+      }
       if (airing) {
         actions.append(actionButton('Watch here', 'Live, in a player beside the guide', '', () => watchHere(ch)));
         actions.append(actionButton('Watch in VLC', 'Live from the tuner, on this device', '', () => watchInVlc(ch)));

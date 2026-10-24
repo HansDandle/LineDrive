@@ -5,6 +5,16 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.0] - 2026-10-24
+
+### Added
+- Tuner clashes suggest another airing. When a recording won't get a tuner and the same episode (same show, season/episode or episode title) airs again in the week's guide when a tuner is free, the warning says so and **Record that one instead** moves it: one tap in Upcoming on the home page or in the show's details in the guide. Local channels are offered before out-of-market ones, then the earliest airing, and never one that would leave another recording without a tuner. Nothing moves without the tap.
+  - Includes clashes caused by sports overrun padding: when a game runs long the show after it is pushed back, so the padding holds its tuner, and another airing of the show that needs it is the way out.
+  - A one-time recording (or a new-episodes series episode) moves to the other airing; a time-slot series skips just that airing ("Recording another airing" in Upcoming) and its keep/delete setting applies to the moved recording.
+
+### Fixed
+- A recording of a live game gets the sports overrun minutes too (`recording.sports_overrun_minutes`, default 30), including **Record the rest** of a game already on. Only the shows after a game got them before, so a game that ran long lost its ending.
+
 ## [4.0.0] - 2026-10-24
 
 ### Added

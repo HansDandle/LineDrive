@@ -325,7 +325,7 @@ def run_schedule_loop():
                     pad, game = overrun_padding(ch_num, slot)
                     if pad:
                         dur_min += pad
-                        print(f"[Scheduler] Adding {pad} min: live sports earlier on {ch_num} "
+                        print(f"[Scheduler] Adding {pad} min: live sports on {ch_num} "
                               f"({game.get('title')}{': ' + game['episode_title'] if game.get('episode_title') else ''}) may run long")
                     crf = int(job.get('crf') or 23)
                     preset = job.get('preset') or 'fast'
@@ -937,7 +937,9 @@ def planned_airings(jobs, now_dt, horizon=CLASH_HORIZON, padding=lambda channel,
 def find_clashes(airings, busy_until, tuners):
     """Hand out tuners the way the recordings will take them: each airing gets one if any is free
     when it starts, and keeps it to the end. busy_until: [(end, title)] already recording.
-    Returns [(start, end, job, [titles holding every tuner then])] for airings left without one."""
+    Sports overrun padding counts as busy: when a game runs long, the show after it really is
+    still on then. Returns [(start, end, job, [titles holding every tuner then])] for airings
+    left without one."""
     held = list(busy_until)
     out = []
     for start, end, job in airings:
@@ -970,7 +972,8 @@ def schedule_clashes():
                                   skip=lambda job, slot: bool(skip_reason(job, slot)[0]))
         for start, end, job, holders in find_clashes(airings, busy, TUNER_COUNT):
             data[(job.get('id'), start)] = {'job_id': job.get('id'), 'title': job.get('title') or 'Recording',
-                                            'start': start, 'with': holders}
+                                            'start': start, 'with': holders,
+                                            'alternative': other_airing(job, start, airings, busy, now)}
     _CLASH_CACHE.update(at=time.time(), data=data)
     return data
 
@@ -987,11 +990,62 @@ def clash_warning(clashes):
     parts = [f"{c['title']} ({_when_label(c['start'])}) won't record: {tuners} will be busy with "
              f"{_and_list(c['with'])}" for c in sorted(clashes, key=lambda c: c['start'])[:3]]
     more = f" (and {len(clashes) - 3} more)" if len(clashes) > 3 else ''
-    return 'Heads up: ' + '; '.join(parts) + more + '. Cancel one of them to free a tuner.'
+    alts = [f"{c['title']} also airs {c['alternative']['label']}" for c in clashes if c.get('alternative')]
+    if alts and len(clashes) == 1:
+        tail = f". It also airs {clashes[0]['alternative']['label']}, when a tuner is free."
+    else:
+        tail = '. Cancel one of them to free a tuner' + (f" ({'; '.join(alts[:3])})" if alts else '') + '.'
+    return 'Heads up: ' + '; '.join(parts) + more + tail
 
 def clash_message(clash):
     """One clash, for a badge's explanation (None when there's no clash)"""
     return clash_warning([clash])[len('Heads up: '):] if clash else None
+
+def clash_details(clash):
+    """A clash for the web pages: the message, plus the other airing to record instead, if any"""
+    if not clash:
+        return None
+    alt = clash.get('alternative')
+    return {'message': clash_message(clash), 'job_id': clash['job_id'], 'start': clash['start'].timestamp(),
+            'alternative': {'channel_number': alt['channel_number'], 'channel_name': alt['channel_name'],
+                            'label': alt['label'], 'start': alt['start'].timestamp()} if alt else None}
+
+def other_airing(job, start, airings, busy, now):
+    """Another airing of the episode that won't get a tuner at `start`, where a tuner will be free
+    and moving it there leaves nothing else without one: {channel_number, channel_name, start, end,
+    label, listing}, or None. Same show and the same episode (season/episode number, or episode
+    title); local channels first, then the earliest."""
+    prog = program_on_air(job.get('channel_number'), start) if job.get('type') == 'recurring_series' else None
+    prog = prog or job
+    key = _episode_key(prog)
+    if key[0] == 'airing' or not prog.get('title'):
+        return None  # no way to tell which episode it is
+    show = _norm_title(prog.get('title'))
+    distant = distant_channels()
+    before = {(id(a[2]), a[0]) for a in find_clashes(airings, busy, TUNER_COUNT)}
+    options = []
+    for p in visible_epg():
+        num = str(p.get('channel_number'))
+        when = _program_start(p)
+        if not when or when <= now + timedelta(minutes=2) or (num == str(job.get('channel_number')) and when == start):
+            continue
+        if _norm_title(p.get('title')) != show or _episode_key(p) != key or (channels and num not in channels):
+            continue
+        if _guide_coverage(num, when):
+            continue  # already being recorded there
+        options.append((num in distant, when, num, p))
+    for _, when, num, p in sorted(options, key=lambda o: (o[0], o[1], _chan_sort(o[2]))):
+        end = when + timedelta(minutes=int(p.get('duration') or 30))
+        moved = {'title': job.get('title') or p.get('title')}
+        trial = [a for a in airings if not (a[2] is job and a[0] == start)] + [(when, end, moved)]
+        trial.sort(key=lambda a: a[0])  # stable: it goes after anything already starting then
+        after = {(id(a[2]), a[0]) for a in find_clashes(trial, busy, TUNER_COUNT)}
+        if (id(moved), when) in after or not after <= before:
+            continue
+        name = channels.get(num, p.get('call_sign', ''))
+        return {'channel_number': num, 'channel_name': name, 'start': when, 'end': end, 'listing': p,
+                'label': f"{_when_label(when, now)} on {num} {name}".strip()}
+    return None
 
 def warns_of_clashes(view):
     """For routes that change the schedule: when the change leaves a recording without a tuner,
@@ -1242,6 +1296,8 @@ def skip_reason(job, slot):
     if job.get('type') != 'recurring_series':
         return None, None
     prog = program_on_air(job.get('channel_number'), slot)
+    if slot.strftime('%Y-%m-%dT%H:%M') in (job.get('moved_slots') or []):
+        return 'recording another airing', prog or {}
     if not prog:
         return None, None
     if job.get('new_only') and 'flags' in prog and not is_new_listing(prog):
@@ -1292,13 +1348,23 @@ NOT_ENCODER_FAILURES = ('No free tuner', 'The tuner doesn', 'Couldn’t reach', 
 
 SPORTS_LOOKBACK = timedelta(hours=3)
 
+def is_live_sports(prog):
+    return 'Sports' in (prog.get('genre') or '') and ('Live' in (prog.get('flags') or []) or 'flags' not in prog)
+
+def sports_overrun_minutes():
+    """Config recording.sports_overrun_minutes (default 30; 0 turns it off)"""
+    return max(0, int(config.get('recording', 'sports_overrun_minutes', 30) or 0))
+
 def overrun_padding(channel_number, slot):
-    """Extra minutes for a recording that follows live sports on the same channel: games run long
-    and push everything after them (a 10:00 news, then a 10:29 show) later than the guide says.
-    Config recording.sports_overrun_minutes (default 30; 0 turns it off)."""
-    minutes = int(config.get('recording', 'sports_overrun_minutes', 30) or 0)
+    """Extra minutes for a recording of a live game, or one that follows live sports on the same
+    channel: games run long, and push everything after them (a 10:00 news, then a 10:29 show)
+    later than the guide says. Returns (minutes, the game's listing)."""
+    minutes = sports_overrun_minutes()
     if minutes <= 0:
         return 0, None
+    on = program_on_air(channel_number, slot)
+    if on and is_live_sports(on):
+        return minutes, on  # recording the game itself
     for p in epg_by_channel().get(str(channel_number), []):
         start = _program_start(p)
         if not start or start >= slot:
@@ -1306,7 +1372,7 @@ def overrun_padding(channel_number, slot):
         end = start + timedelta(minutes=int(p.get('duration') or 30))
         if not (slot - SPORTS_LOOKBACK <= end <= slot + timedelta(minutes=1)):
             continue
-        if 'Sports' in (p.get('genre') or '') and ('Live' in (p.get('flags') or []) or 'flags' not in p):
+        if is_live_sports(p):
             return minutes, p
     return 0, None
 
@@ -1636,6 +1702,8 @@ def rule_of(job):
     """The series rule a schedule entry records for (its own id for a time-slot series), or None"""
     if job.get('series_rule') is not None:
         return job['series_rule']
+    if job.get('moved_rule') is not None:
+        return job['moved_rule']  # an airing a time-slot series moved here to get a tuner
     return job.get('id') if job.get('type') == 'recurring_series' else None
 
 def _from_utc(text):
@@ -4622,6 +4690,7 @@ def api_guide():
                 'duration': duration,
                 'recording': coverage,
                 'clash': clash_message(clashes.get((coverage['job_id'], start_dt))) if coverage else None,
+                'clash_info': clash_details(clashes.get((coverage['job_id'], start_dt))) if coverage else None,
                 'recording_now': recording_now(num, start_dt, end_dt),
                 'image': p.get('image') or '',
                 'new': is_new_listing(p),
@@ -4715,8 +4784,11 @@ def recording_now(channel_number, start_dt, end_dt):
     return False
 
 def start_in_progress(channel_number, prog, end_dt):
-    """Start recording a program that's already airing, through its scheduled end. Returns minutes."""
+    """Start recording a program that's already airing, through its scheduled end (plus the
+    sports overrun minutes for a live game). Returns minutes."""
     minutes = max(1, int((end_dt - datetime.now()).total_seconds() // 60) + 1)
+    if is_live_sports(prog):
+        minutes += sports_overrun_minutes()
     run_threaded(record_channel, str(channel_number), minutes, 23, 'fast', 'mp4', title=prog.get('title'))
     return minutes
 
@@ -4930,6 +5002,45 @@ def api_guide_cancel():
     what = 'series' if job.get('type') in ('recurring_series', 'guide_series') else \
         'watch' if job.get('type') == 'watch' else 'recording'
     return jsonify({'message': f"Cancelled {what}: {job.get('title', '')}"})
+
+@app.route('/api/clash/move', methods=['POST'])
+@warns_of_clashes
+def api_clash_move():
+    """Record another airing of an episode that won't get a tuner. Body: {job_id, start} (the
+    clashing airing, start in epoch seconds), as offered in the clash's details. A one-time
+    recording moves; a time-slot series skips just that airing."""
+    data = request.get_json() or {}
+    try:
+        start = datetime.fromtimestamp(float(data.get('start')))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'start is required'}), 400
+    clash = schedule_clashes().get((data.get('job_id'), start))
+    if not clash:
+        return jsonify({'error': 'That recording has a tuner now; nothing to move.'}), 409
+    alt = clash.get('alternative')
+    if not alt:
+        return jsonify({'error': 'No other airing of that episode has a tuner free.'}), 409
+    job = next((j for j in scheduled_jobs if isinstance(j, dict) and j.get('id') == clash['job_id']), None)
+    if not job:
+        return jsonify({'error': 'Recording not found'}), 404
+    new_id = schedule_episode_recording(dict(alt['listing'], channel_number=alt['channel_number']))
+    if not new_id:
+        return jsonify({'error': 'Could not schedule the other airing'}), 500
+    new = next(j for j in scheduled_jobs if j.get('id') == new_id)
+    new['moved_from'] = job.get('id')
+    if job.get('type') == 'recurring_series':
+        # Skip just this airing; the series records the other one for the same rule
+        now_key = datetime.now().strftime('%Y-%m-%dT%H:%M')
+        job['moved_slots'] = [k for k in job.get('moved_slots') or [] if k >= now_key] + [start.strftime('%Y-%m-%dT%H:%M')]
+        new['moved_rule'] = job.get('id')  # its keep/delete setting applies (series_rule would hide it from Upcoming)
+    else:
+        for key in ('series_rule', 'episode_key'):
+            if job.get(key) is not None:
+                new[key] = job[key]
+        scheduled_jobs.remove(job)
+    save_schedule()
+    print(f"[Schedule] {clash['title']}: recording {alt['label']} instead of {_when_label(start)} (no free tuner then)")
+    return jsonify({'message': f"Recording {clash['title']} {alt['label']} instead.", 'job_id': new_id})
 
 @app.route('/debug/channel_schedule')
 def debug_channel_schedule():
@@ -5509,8 +5620,8 @@ def upcoming_recordings():
         clash = min((first_clash[i] for i in job_ids if i in first_clash), key=lambda c: c['start'], default=None)
         if not clash:
             return None
-        return {'when': _when_label(clash['start'], now), 'next': clash['start'] == nxt,
-                'with': list(dict.fromkeys(clash['with'])), 'message': clash_message(clash)}
+        return dict(clash_details(clash), when=_when_label(clash['start'], now), next=clash['start'] == nxt,
+                    **{'with': list(dict.fromkeys(clash['with']))})
 
     items = []
     for job in scheduled_jobs:

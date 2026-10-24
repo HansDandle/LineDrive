@@ -10,10 +10,11 @@ HDHomeRun are especially welcome: both were built and tested without that hardwa
 
 ## Later
 
-### Automatic clash resolution (to evaluate)
-When more recordings overlap than there are tuners, move one to another airing of the same episode
-(a later time or a sister station) or use per-series priorities, as NextPVR does. Today LineDrive
-warns and badges the recording that won't get a tuner.
+### Series priorities
+When more recordings overlap than there are tuners and no other airing has a tuner free, let
+per-series priorities decide which one loses, instead of the one scheduled first winning. Only
+worth it if real clashes turn out to be common; 4.1 already offers another airing where there is
+one.
 
 ### Per-box channel lineups in clash warnings
 Clash warnings count every box's tuners together, which is right when the boxes share an antenna.

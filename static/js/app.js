@@ -243,15 +243,34 @@
         el('div', { class: 'up-body' },
           el('p', { class: 'up-title' }, item.title, kind,
             item.airing && el('span', { class: 'tag tag-live', text: 'On now' }),
-            item.skip && el('span', { class: 'tag', text: item.skip_reason === 'already recorded' ? 'Already have it, will skip' : 'Rerun, will skip' }),
+            item.skip && el('span', { class: 'tag', text: item.skip_reason === 'already recorded' ? 'Already have it, will skip'
+              : item.skip_reason === 'recording another airing' ? 'Recording another airing' : 'Rerun, will skip' }),
             clash),
           item.episode && el('p', { class: 'up-episode', text: item.episode }),
           item.clash && el('p', { class: 'up-clash small', text: item.clash.message }),
+          item.clash && item.clash.alternative && el('button', {
+            type: 'button', class: 'btn btn-sm',
+            text: 'Record ' + item.clash.alternative.label + ' instead',
+            onclick: (e) => recordOtherAiring(item.clash, e.currentTarget),
+          }),
           el('p', { class: 'muted small', text: where }),
           (newOnly || (item.series && item.keep)) && el('div', { class: 'up-options' },
             newOnly, item.series && item.keep && keepMenu(item, status))),
         cancel);
     }));
+  }
+
+  // A clash's other airing of the same episode, where a tuner is free
+  async function recordOtherAiring(clash, button) {
+    button.disabled = true;
+    try {
+      const data = await postJSON('/api/clash/move', { job_id: clash.job_id, start: clash.start });
+      toast(data.message);
+    } catch (err) {
+      toast(err.message, true);
+      button.disabled = false;
+    }
+    refreshStatus();
   }
 
   async function cancelRecording(item) {

@@ -106,6 +106,88 @@ def test_no_clash_no_warning(dvr, monkeypatch):
         dvr.clashes_changed()
 
 
+def test_sports_padding_holds_the_tuner(dvr, monkeypatch):
+    # When a game runs long, the show after it is pushed back, so its padded end is real show:
+    # a recording that needs the tuner then is a clash (offered another airing), not a trim
+    monkeypatch.setattr(dvr, "overrun_padding", lambda channel, slot: (30, {}) if channel == "7.1" else (0, None))
+    jobs = [once("News after the game", "2026-10-01", "22:00", 30, channel_number="7.1"),
+            once("Other", "2026-10-01", "22:00", 60), once("Late show", "2026-10-01", "22:35", 30)]
+    airings = dvr.planned_airings(jobs, NOW, padding=lambda channel, slot: dvr.overrun_padding(channel, slot)[0])
+    assert [j["title"] for _, _, j, _ in dvr.find_clashes(airings, [], 2)] == ["Late show"]
+
+
+def _listing(title, num, day, time, season="3", episode="7", episode_title="The Pilot"):
+    return {"title": title, "channel_number": num, "date": day.strftime("%Y-%m-%d"), "time": time,
+            "duration": 60, "season_number": season, "episode_number": episode, "episode_title": episode_title,
+            "call_sign": "KXXX", "flags": []}
+
+
+def test_clash_offers_another_airing_and_moves_it(dvr, monkeypatch):
+    day = (datetime.now() + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+    late = day + timedelta(days=1)
+    epg = [_listing("Elsbeth", "5.1", day, "08:00 PM"),
+           _listing("Elsbeth", "24.2", late, "01:00 AM"),                       # the same episode later
+           _listing("Elsbeth", "7.1", late, "02:00 AM", episode="8", episode_title="Another")]  # a different one
+    monkeypatch.setattr(dvr, "TUNER_COUNT", 2)
+    monkeypatch.setattr(dvr, "visible_epg", lambda: epg)
+    monkeypatch.setattr(dvr, "channels", {"5.1": "KTBC", "24.2": "KVUE2", "7.1": "KXAN"})
+    monkeypatch.setattr(dvr, "save_metadata_file", lambda info, name: None)
+    when = day.strftime("%Y-%m-%d")
+    dvr.scheduled_jobs[:] = [dict(once("NCIS", when, "20:00"), id=1), dict(once("Survivor", when, "20:00"), id=2),
+                             dict(once("Elsbeth", when, "20:00", season_number="3", episode_number="7",
+                                       episode_title="The Pilot"), id=3, series_rule=9, episode_key=["se", 3, 7])]
+    dvr.clashes_changed()
+    client = dvr.app.test_client()
+    try:
+        info = dvr.clash_details(next(c for c in dvr.schedule_clashes().values() if c["job_id"] == 3))
+        alt = info["alternative"]
+        assert alt["channel_number"] == "24.2" and "on 24.2 KVUE2" in alt["label"]
+        assert "It also airs" in info["message"]
+        item = {"clash": info}
+        r = client.post("/api/clash/move", json={"job_id": 3, "start": item["clash"]["start"]})
+        assert r.status_code == 200 and "instead" in r.get_json()["message"]
+        moved = [j for j in dvr.scheduled_jobs if j.get("title") == "Elsbeth"]
+        assert len(moved) == 1 and moved[0]["channel_number"] == "24.2" and moved[0]["time"] == "01:00"
+        assert moved[0]["series_rule"] == 9 and moved[0]["episode_key"] == ["se", 3, 7]
+        assert dvr.schedule_clashes() == {}
+        # Nothing left to move
+        assert client.post("/api/clash/move", json={"job_id": 3, "start": item["clash"]["start"]}).status_code == 409
+    finally:
+        dvr.scheduled_jobs[:] = []
+        dvr.clashes_changed()
+
+
+def test_a_series_skips_just_the_moved_airing(dvr, monkeypatch):
+    day = (datetime.now() + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+    epg = [_listing("Jeopardy!", "5.1", day, "08:00 PM"),
+           _listing("Jeopardy!", "5.2", day, "11:00 PM")]
+    monkeypatch.setattr(dvr, "TUNER_COUNT", 2)
+    monkeypatch.setattr(dvr, "visible_epg", lambda: epg)
+    monkeypatch.setattr(dvr, "program_on_air", lambda ch, when: next(
+        (p for p in epg if p["channel_number"] == str(ch) and dvr._program_start(p) == when), None))
+    monkeypatch.setattr(dvr, "already_recorded", lambda p: False)
+    monkeypatch.setattr(dvr, "channels", {"5.1": "KTBC", "5.2": "KTBC2"})
+    monkeypatch.setattr(dvr, "save_metadata_file", lambda info, name: None)
+    when = day.strftime("%Y-%m-%d")
+    rule = {"id": 5, "type": "recurring_series", "status": "active", "title": "Jeopardy!", "time": "20:00",
+            "duration": 60, "channel_number": "5.1", "recurrence": {"days": []}}
+    dvr.scheduled_jobs[:] = [dict(once("NCIS", when, "20:00"), id=1), dict(once("Survivor", when, "20:00"), id=2), rule]
+    dvr.clashes_changed()
+    try:
+        clash = next(c for c in dvr.schedule_clashes().values() if c["job_id"] == 5)
+        assert clash["alternative"]["channel_number"] == "5.2"
+        r = dvr.app.test_client().post("/api/clash/move", json={"job_id": 5, "start": clash["start"].timestamp()})
+        assert r.status_code == 200
+        assert rule["moved_slots"] == [clash["start"].strftime("%Y-%m-%dT%H:%M")]
+        assert dvr.skip_reason(rule, clash["start"])[0] == "recording another airing"
+        new = next(j for j in dvr.scheduled_jobs if j.get("channel_number") == "5.2")
+        assert dvr.rule_of(new) == 5  # the series' keep/delete setting still applies
+        assert not any(c["job_id"] == 5 for c in dvr.schedule_clashes().values())
+    finally:
+        dvr.scheduled_jobs[:] = []
+        dvr.clashes_changed()
+
+
 def test_settings_turn_off_srt_and_nfo(dvr, monkeypatch):
     import copy
     monkeypatch.setattr(dvr.config, "config", copy.deepcopy(dvr.config.config))
