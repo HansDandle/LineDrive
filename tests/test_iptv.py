@@ -115,3 +115,26 @@ def test_a_recording_takes_the_only_stream_from_live_tv(dvr, monkeypatch, tmp_pa
     assert dvr.make_room("1002", "The Game") is None       # free now
     assert watching.proc.terminated and not tv.sessions
     assert "record The Game" in tv.ended[watching.id][0]  # what the viewer's player is told
+
+
+def test_adding_a_playlist_fetches_the_guide_now(dvr, monkeypatch, tmp_path):
+    """A playlist added in Settings gets its listings right away, not at the next daily refresh"""
+    import copy
+    monkeypatch.setattr(dvr.config, "config", copy.deepcopy(dvr.config.config))
+    monkeypatch.setattr(dvr.config, "save_config", lambda: None)
+    monkeypatch.setattr(dvr, "_restart_soon", lambda: None)
+    monkeypatch.setattr(dvr, "EPG_CACHE_FILE", str(tmp_path / "epg_cache.json"))
+    monkeypatch.setattr(dvr, "EPG_CACHE", {"data": [{"title": "Old"}], "timestamp": 12345})
+    client = dvr.app.test_client()
+    base = {"hdhr_ip": "192.168.1.50", "zip_code": dvr.config.get("epg", "zip_code", ""),
+            "xmltv": dvr.config.get("epg", "xmltv", "") or ""}
+    client.post("/api/setup/save", json=dict(base, iptv=[]))
+    dvr.EPG_CACHE.update(data=[{"title": "Old"}], timestamp=12345)
+    client.post("/api/setup/save", json=dict(base, iptv=[]))       # nothing changed: cache kept
+    assert dvr.EPG_CACHE["timestamp"] == 12345
+    row = {"name": "Mine", "m3u": "/config/mine.m3u", "max_streams": 1, "xmltv": "http://epg.example/guide.xml"}
+    client.post("/api/setup/save", json=dict(base, iptv=[row]))
+    assert dvr.EPG_CACHE["timestamp"] == 0 and not dvr.EPG_CACHE["data"]
+    dvr.EPG_CACHE.update(data=[{"title": "Old"}], timestamp=12345)
+    client.post("/api/setup/save", json=dict(base, iptv=[dict(row, xmltv="http://epg.example/other.xml")]))
+    assert dvr.EPG_CACHE["timestamp"] == 0                          # a different guide for it too

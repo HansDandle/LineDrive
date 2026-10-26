@@ -235,10 +235,14 @@
       if (ch.signal) num.append(signalBars(ch.signal));
       chan.append(num, el('span', 'chan-name', ch.name));
       chan.title = ch.call_sign ? ch.name + ' (' + ch.call_sign + ')' : ch.name;
-      const track = el('div', 'track' + (ch.programs.length ? '' : ' empty'));
+      const track = el('div', 'track');
       track.style.width = trackW + 'px';
 
-      for (const p of ch.programs) {
+      // A channel without listings (an IPTV channel whose guide hasn't matched, say) is still
+      // one block the width of the day, so it can be picked to watch live
+      const progs = ch.programs.length ? ch.programs
+        : [{ nodata: true, title: '', start: winStart, end: winEnd, duration: Math.round((winEnd - winStart) / 60) }];
+      for (const p of progs) {
         const left = Math.max(p.start, winStart);
         const right = Math.min(p.end, winEnd);
         const x = Math.round(((left - winStart) / 60) * ppm);
@@ -249,10 +253,17 @@
         b.style.width = w + 'px';
         if (w < 90) b.classList.add('tiny');
         const label = el('span', 'label');
-        label.append(el('span', 't', p.title || 'Untitled'));
-        label.append(el('span', 's', p.episode_title ? shortTime(p.time) + ' · ' + p.episode_title : shortTime(p.time)));
+        if (p.nodata) {
+          b.classList.add('nodata');
+          label.append(el('span', 't', 'No guide data'));
+          if (p.start <= now && now < p.end) label.append(el('span', 's', 'Tap to watch live'));
+          b.title = 'No guide data for ' + ch.number + ' ' + ch.name;
+        } else {
+          label.append(el('span', 't', p.title || 'Untitled'));
+          label.append(el('span', 's', p.episode_title ? shortTime(p.time) + ' · ' + p.episode_title : shortTime(p.time)));
+          b.title = p.title + (p.episode_title ? ' — ' + p.episode_title : '') + '\n' + shortTime(p.time) + ' (' + p.duration + ' min)';
+        }
         b.append(label);
-        b.title = p.title + (p.episode_title ? ' — ' + p.episode_title : '') + '\n' + shortTime(p.time) + ' (' + p.duration + ' min)';
         b._x = x;
         b._w = w;
         b._label = label;
@@ -670,6 +681,7 @@
     state.selected = { ch, p, btn };
 
     panelEls.channel.textContent = ch.number + ' · ' + ch.name;
+    if (p.nodata) return openNoData(ch, p);
     panelEls.title.textContent = p.title || 'Untitled';
     const se = [p.season && 'S' + p.season, p.episode && 'E' + p.episode].filter(Boolean).join(' ');
     panelEls.episode.textContent = [se, p.episode_title].filter(Boolean).join(' · ');
@@ -736,6 +748,28 @@
       actions.append(actionButton('Record series', 'Every airing of “' + p.title + '” on ' + ch.number + ' in this time slot'
         + (airing && !p.recording_now ? ', starting with this one' : ''), '',
         () => post('/api/guide/record', Object.assign({ mode: 'series' }, body))));
+    }
+    openPanelFinish(actions);
+  }
+
+  function openNoData(ch, p) {
+    panelEls.title.textContent = 'No guide data';
+    panelEls.episode.textContent = '';
+    panelEls.when.textContent = '';
+    panelEls.meta.textContent = '';
+    panelEls.recording.textContent = '';
+    panelEls.art.hidden = true;
+    panelEls.art.removeAttribute('src');
+    panelEls.desc.textContent = 'There are no listings for this channel. You can still watch it live, and record it ' +
+      'with Record a channel on the home page. For an IPTV channel, Test in Settings → Integrations → IPTV shows ' +
+      'how many of the playlist’s channels its guide matched.';
+    renderSignal(ch);
+    const actions = panelEls.actions;
+    actions.replaceChildren();
+    const now = nowSec();
+    if (p.start <= now && now < p.end) {
+      actions.append(actionButton('Watch here', 'Live, in a player beside the guide', 'primary', () => watchHere(ch)));
+      actions.append(actionButton('Watch in VLC', 'Live from the tuner, on this device', '', () => watchInVlc(ch)));
     }
     openPanelFinish(actions);
   }

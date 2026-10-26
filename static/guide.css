@@ -147,11 +147,6 @@ button, input { font: inherit; color: inherit; }
 .sig.none i.on { background: var(--rec); }
 .chan-name { color: var(--text-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .track { position: relative; flex: none; }
-.track.empty::after {
-  content: 'No guide data';
-  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
-  color: var(--text-3); font-size: 12px;
-}
 
 .prog {
   position: absolute; top: 4px; bottom: 4px;
@@ -173,6 +168,9 @@ button, input { font: inherit; color: inherit; }
 .prog.tiny { padding: 4px 6px; }
 .prog.tiny .s { display: none; }
 .prog.past { opacity: 0.45; }
+/* A channel with no listings: one quiet block across the day, still tappable to watch live */
+.prog.nodata { background: transparent; border-style: dashed; }
+.prog.nodata .t { color: var(--text-3); font-weight: 500; }
 .prog.airing { border-color: rgba(79, 195, 247, 0.45); background: linear-gradient(90deg, var(--accent-soft), var(--surface) 70%); }
 .prog.rec { border-color: rgba(255, 90, 95, 0.55); background: linear-gradient(90deg, var(--rec-soft), var(--surface) 70%); }
 .prog.rec .t::before {
@@ -342,4 +340,3 @@ body.tv { --row-h: 72px; --ruler-h: 40px; --chan-w: 140px; }
 .tv .prog:focus { outline: 3px solid var(--accent); outline-offset: -3px; background: var(--surface-2); z-index: 1; }
 .tv .day:focus, .tv #nowBtn:focus, .tv .p-actions button:focus, .tv .panel-close:focus { outline: 3px solid var(--accent); outline-offset: 2px; }
 .tv .chan-name { font-size: 13px; }
-.tv .track.empty::after { left: calc(var(--offset, 0px) + 12px); }

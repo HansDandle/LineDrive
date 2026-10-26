@@ -5,6 +5,13 @@ All notable changes to LineDrive will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.4] - 2026-10-25
+
+### Fixed
+- A newly added IPTV playlist got no guide listings until the next daily guide refresh. Saving a change to the IPTV playlists, their guides or `groups` now fetches the guide right away, as changing the ZIP code or XMLTV guide already did.
+- A channel with no listings (an IPTV channel whose guide didn't match, say) couldn't be picked in the guide, and on today's view its "No guide data" note sat off screen. It's now one tappable block across the day, with **Watch here** and **Watch in VLC** while it's on.
+- **Record a channel** on the home page lists only the channels shown in the guide, leaving out the ones hidden under Settings → Stations.
+
 ## [4.2.3] - 2026-10-24
 
 ### Fixed

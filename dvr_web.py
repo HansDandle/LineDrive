@@ -5595,6 +5595,7 @@ def api_setup_save():
     c.setdefault('guide', {})['distant_channels'] = [str(m) for m in data.get('distant_channels', []) if str(m).isdigit()]
     if 'hidden_channels' in data:
         c['guide']['hidden_channels'] = [str(n) for n in data['hidden_channels'] if str(n).strip()]
+    old_iptv = iptv_guide_sources()
     if isinstance(data.get('iptv'), list):
         old = {s.get('m3u'): s for s in c.get('iptv') or [] if isinstance(s, dict)}
         sources = []
@@ -5618,8 +5619,9 @@ def api_setup_save():
             if k in values:
                 target[k] = int(values[k] or 1883) if k == 'port' else str(values[k] or '').strip()
     config.save_config()
-    if zip_code != old_zip or (epg.get('xmltv') or '') != old_xmltv:
-        # A different market or guide source: drop the cached guide so the new one is fetched
+    if zip_code != old_zip or (epg.get('xmltv') or '') != old_xmltv or iptv_guide_sources() != old_iptv:
+        # A different market or guide source (an IPTV playlist added, say): drop the cached
+        # guide so the new one is fetched, rather than waiting for the daily refresh
         EPG_CACHE['data'] = None
         EPG_CACHE['timestamp'] = 0
         try:
@@ -5628,6 +5630,11 @@ def api_setup_save():
             pass
     threading.Thread(target=_restart_soon, daemon=True).start()
     return jsonify({'message': 'Saved. LineDrive is restarting to apply the settings...'})
+
+def iptv_guide_sources():
+    """The IPTV playlists and guides set up, to tell when they've changed"""
+    return sorted((s.get('m3u') or '', s.get('xmltv') or '', tuple(s.get('groups') or []))
+                  for s in config.get('iptv', default=[]) or [] if isinstance(s, dict))
 
 def _restart_soon():
     """Re-exec this process so settings read at startup (tuner address, folders) take effect"""
@@ -5946,8 +5953,9 @@ def index():
         return redirect('/setup')
     cache_bust = str(int(time.time()))  # Current timestamp for cache busting
     torrent_enabled = TORRENTS_ENABLED and bool((config.get('torrent_client', default={}) or {}).get('enabled'))
+    hidden = hidden_channels()
     return render_template("index.html",
-                         channels=channels,
+                         channels={n: name for n, name in channels.items() if n not in hidden},
                          days=days_list,
                          torrent_enabled=torrent_enabled,
                          cache_bust=cache_bust)

@@ -47,6 +47,8 @@ def test_hidden_channels_leave_the_guide(dvr, guide, no_hidden):
     assert victim not in after and len(after) == len(shown) - 1
     assert all(str(p["channel_number"]) != victim for p in dvr.visible_epg())
     assert victim in dvr.channels                      # still recordable by number
+    home = client.get("/").get_data(as_text=True)      # ...but not offered in Record a channel
+    assert f'<option value="{victim}">' not in home and f'<option value="{after[0]}">' in home
     client.post("/api/guide/hide", json={"channels": [victim], "hidden": False})
     assert victim in [c["number"] for c in client.get("/api/guide?day=0").get_json()["channels"]]
 
