@@ -30,6 +30,13 @@ one.
 
 - **Skip episodes already in Jellyfin.** Before recording, ask Jellyfin whether that episode is in
   any library and skip it if so. Mostly helps with reruns.
+- **Pick a channel's station when ZIPs disagree.** With several ZIP codes, two lineups can put
+  different stations on the same number (12.1 is CBS here, NBC in the next ZIP over). The guide
+  guesses by matching the call sign to the tuner's channel name, which fails for subchannels named
+  like "AntennaTV", and search, Ask LineDrive and series matching see both stations' shows. Add
+  **Wrong listings?** in a show's details, listing each station the ZIPs have for that number, and
+  save the choice (`guide.channel_stations`, e.g. `{"12.1": "WYYY"}`) where the guide is loaded so
+  everything uses it.
 - **Upload IPTV playlists and guides.** An Upload button beside Settings → IPTV's M3U and XMLTV
   fields that saves the file into LineDrive's config folder and fills in its path. In Docker
   LineDrive only sees its own folders, so this beats a file browser.
